@@ -2252,6 +2252,7 @@ namespace rpc {
       std::string key_image;  // The key image of the transaction that is blacklisted on the network.
       uint64_t unlock_height; // The height at which the key image is removed from the blacklist and becomes spendable.
       uint64_t amount;        // The total amount of locked Beldex in atomic units in this blacklisted stake.
+      std::string key;        // The Public key of the MasterNode
 
       KV_MAP_SERIALIZABLE
     };

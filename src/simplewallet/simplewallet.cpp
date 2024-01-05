@@ -6327,6 +6327,8 @@ bool simple_wallet::query_locked_stakes(bool print_result, bool print_key_images
     bool once_only = true;
     bool first = true;
     crypto::key_image key_image;
+    crypto::public_key key;
+
     for (const auto& entry : response)
     {
       if (first)
@@ -6353,6 +6355,7 @@ bool simple_wallet::query_locked_stakes(bool print_result, bool print_key_images
         msg_buf.append("Blacklisted Stakes\n");
         once_only = false;
       }
+      msg_buf.append(fmt::format(fg(fmt::color::sky_blue) | fmt::emphasis::bold,"Black list public key         : {}\n",entry.key));
       msg_buf.append(fmt::format("  Unlock Height : {}\n", std::to_string(entry.unlock_height)));
       if(print_key_images)
       {

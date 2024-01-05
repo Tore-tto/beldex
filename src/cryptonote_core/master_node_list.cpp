@@ -679,6 +679,7 @@ namespace master_nodes
               key_image_blacklist.emplace_back(); // NOTE: Use default value for version in key_image_blacklist_entry
               key_image_blacklist_entry &entry = key_image_blacklist.back();
               entry.key_image                  = contribution.key_image;
+              entry.key                        = key;
               entry.unlock_height              = block_height + staking_num_lock_blocks(nettype,hf_version);
               entry.amount                     = contribution.amount;
             }

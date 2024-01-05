@@ -3007,6 +3007,7 @@ namespace cryptonote { namespace rpc {
       res.blacklist.emplace_back();
       auto &new_entry = res.blacklist.back();
       new_entry.key_image     = tools::type_to_hex(entry.key_image);
+      new_entry.key           = tools::type_to_hex(entry.key);
       new_entry.unlock_height = entry.unlock_height;
       new_entry.amount = entry.amount;
     }
