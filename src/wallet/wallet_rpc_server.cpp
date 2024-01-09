@@ -3496,6 +3496,58 @@ namespace {
     return {oxenc::to_hex(value.to_view())};
   }
 
+  LOCKED_STAKES::response wallet_rpc_server::invoke(LOCKED_STAKES::request&& req)
+  {
+    require_open();
+    LOCKED_STAKES::response res{};
+    //ACTIVE
+    {
+      auto response = m_wallet->list_current_stakes();
+      for (const rpc::GET_MASTER_NODES::response::entry &node_info : response)
+      {
+        LOCKED_STAKES::active active;
+        for (const auto& contributor : node_info.contributors)
+        {
+          for (size_t i = 0; i < contributor.locked_contributions.size(); ++i)
+          {
+            const auto& contribution = contributor.locked_contributions[i];
+            std::string walletaddress = m_wallet->get_account().get_public_address_str(m_wallet->nettype());
+            
+            if (walletaddress == contributor.address)
+            {
+              active.master_node_public_key = node_info.master_node_pubkey;
+              active.key_image = contribution.key_image;
+              active.unlock_height= (node_info.requested_unlock_height != master_nodes::KEY_IMAGE_AWAITING_UNLOCK_HEIGHT) ? std::to_string(node_info.requested_unlock_height) : "Not yet requested to Unlock"; 
+              active.amount = contribution.amount;
+            }
+          }
+        }
+
+        res.active_response.push_back(active);
+      }
+    } 
+    //BLACKLIST
+    {
+      auto [success, response] = m_wallet->get_master_node_blacklisted_key_images();
+      crypto::key_image key_image;
+      for (auto& entry : response)
+      {
+        LOCKED_STAKES::blacklist blacklist;
+        if (!tools::hex_to_type(entry.key_image, key_image))
+          continue;
+        
+        if (!m_wallet->contains_key_image(key_image))
+          continue;
+        blacklist.blacklist_key_image = entry.key_image;
+        blacklist.blacklist_unlock_height = entry.unlock_height;
+        blacklist.blacklist_amount = entry.amount;
+
+        res.blacklist_response.push_back(blacklist);
+      }
+    }
+    return res;
+  }
+
   std::unique_ptr<tools::wallet2> wallet_rpc_server::load_wallet()
   {
     std::unique_ptr<tools::wallet2> wal;

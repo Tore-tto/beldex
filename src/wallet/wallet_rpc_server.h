@@ -168,6 +168,7 @@ namespace tools
     wallet_rpc::BNS_DECRYPT_VALUE::response               invoke(wallet_rpc::BNS_DECRYPT_VALUE::request&& req);
     wallet_rpc::BNS_ENCRYPT_VALUE::response               invoke(wallet_rpc::BNS_ENCRYPT_VALUE::request&& req);
     wallet_rpc::COIN_BURN::response                       invoke(wallet_rpc::COIN_BURN::request&& req);
+    wallet_rpc::LOCKED_STAKES::response                   invoke(wallet_rpc::LOCKED_STAKES::request&& req);
     wallet_rpc::QUERY_KEY::response                       invoke(wallet_rpc::QUERY_KEY::request&& req);
 
   private:

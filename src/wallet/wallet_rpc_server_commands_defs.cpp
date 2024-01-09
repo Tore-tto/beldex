@@ -1317,4 +1317,22 @@ KV_SERIALIZE_MAP_CODE_BEGIN(COIN_BURN::response)
   KV_SERIALIZE(multisig_txset)
   KV_SERIALIZE(unsigned_txset)
 KV_SERIALIZE_MAP_CODE_END()
+
+KV_SERIALIZE_MAP_CODE_BEGIN(LOCKED_STAKES::active)
+  KV_SERIALIZE(master_node_public_key)
+  KV_SERIALIZE(key_image)
+  KV_SERIALIZE(unlock_height)
+  KV_SERIALIZE(amount)
+KV_SERIALIZE_MAP_CODE_END() 
+
+KV_SERIALIZE_MAP_CODE_BEGIN(LOCKED_STAKES::blacklist)
+  KV_SERIALIZE(blacklist_key_image)
+  KV_SERIALIZE(blacklist_unlock_height)
+  KV_SERIALIZE(blacklist_amount)
+KV_SERIALIZE_MAP_CODE_END()
+
+KV_SERIALIZE_MAP_CODE_BEGIN(LOCKED_STAKES::response)
+  KV_SERIALIZE(active_response)
+  KV_SERIALIZE(blacklist_response)
+KV_SERIALIZE_MAP_CODE_END()
 }

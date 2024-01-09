@@ -2544,7 +2544,42 @@ This command is only required if the open wallet is one of the owners of a BNS r
       KV_MAP_SERIALIZABLE
     };
   };
+
+  BELDEX_RPC_DOC_INTROSPECT
+  // Returns the current locked stakes of the wallet that holds the master node.
+  struct LOCKED_STAKES : RESTRICTED
+  {
+    static constexpr auto names() { return NAMES("locked_stake"); }
   
+    struct request : EMPTY {};
+  
+    struct active
+    {
+      std::string master_node_public_key;
+      std::string key_image;
+      std::string unlock_height;
+      uint64_t amount;
+  
+      KV_MAP_SERIALIZABLE
+    };
+  
+    struct blacklist
+    {
+      std::string blacklist_key_image;
+      uint64_t blacklist_unlock_height;
+      uint64_t blacklist_amount;
+      
+      KV_MAP_SERIALIZABLE
+    };
+  
+    struct response
+    {
+      std::vector<active> active_response;
+      std::vector<blacklist> blacklist_response;
+      KV_MAP_SERIALIZABLE
+    };
+  };
+
   /// List of all supported rpc command structs to allow compile-time enumeration of all supported
   /// RPC types.  Every type added above that has an RPC endpoint needs to be added here, and needs
   /// a core_rpc_server::invoke() overload that takes a <TYPE>::request and returns a
@@ -2649,7 +2684,8 @@ This command is only required if the open wallet is one of the owners of a BNS r
     BNS_ADD_KNOWN_NAMES,
     BNS_DECRYPT_VALUE,
     BNS_ENCRYPT_VALUE,
-    COIN_BURN
+    COIN_BURN,
+    LOCKED_STAKES
   >;
 
 }
