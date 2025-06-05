@@ -28,9 +28,6 @@
 [submodule "external/fmt"]
 	path = external/fmt
 	url = https://github.com/fmtlib/fmt.git
-[submodule "external/oxen-encoding"]
-	path = external/oxen-encoding
-	url = https://github.com/oxen-io/oxen-encoding.git
 [submodule "external/nlohmann-json"]
 	path = external/nlohmann-json
 	url = https://github.com/nlohmann/json.git
@@ -43,3 +40,6 @@
 [submodule "external/oxen-logging"]
 	path = external/oxen-logging
 	url = https://github.com/oxen-io/oxen-logging.git
+[submodule "external/oxen-encoding"]
+	path = external/oxen-encoding
+	url = https://github.com/session-foundation/oxen-encoding.git
