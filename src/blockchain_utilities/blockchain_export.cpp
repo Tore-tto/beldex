@@ -34,9 +34,9 @@
 #include "blockchain_objects.h"
 #include "version.h"
 #include "cryptonote_core/uptime_proof.h"
+#include <fmt/std.h>
 
-#undef BELDEX_DEFAULT_LOG_CATEGORY
-#define BELDEX_DEFAULT_LOG_CATEGORY "bcutil"
+static auto logcat = oxen::log::Cat("bcutil");
 
 namespace po = boost::program_options;
 
@@ -45,13 +45,9 @@ int main(int argc, char* argv[])
   TRY_ENTRY();
 
   epee::string_tools::set_module_name_and_folder(argv[0]);
-
-  uint32_t log_level = 0;
   uint64_t block_stop = 0;
   bool blocks_dat = false;
-
   tools::on_startup();
-
   auto opt_size = command_line::boost_option_sizes();
 
   po::options_description desc_cmd_only("Command line options", opt_size.first, opt_size.second);
@@ -92,11 +88,17 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  mlog_configure(mlog_get_default_log_path("beldex-blockchain-export.log"), true);
-  if (!command_line::is_arg_defaulted(vm, arg_log_level))
-    mlog_set_log(command_line::get_arg(vm, arg_log_level).c_str());
-  else
-    mlog_set_log(std::string(std::to_string(log_level) + ",bcutil:INFO").c_str());
+  auto m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
+  auto log_file_path = m_config_folder + "beldex-blockchain-export.log";
+  oxen::log::Level log_level;
+  if(auto level = beldex::logging::parse_level(command_line::get_arg(vm, arg_log_level).c_str())) {
+    log_level = *level;
+  } else {
+      std::cerr << "Incorrect log level: " << command_line::get_arg(vm, arg_log_level).c_str() << std::endl;
+      throw std::runtime_error{"Incorrect log level"};
+  }
+  beldex::logging::init(log_file_path, log_level);
+  oxen::log::warning(logcat, "Starting...");
   block_stop = command_line::get_arg(vm, arg_block_stop);
 
   LOG_PRINT_L0("Starting...");
@@ -117,42 +119,42 @@ int main(int argc, char* argv[])
     output_file_path = fs::u8path(command_line::get_arg(vm, arg_output_file));
   else
     output_file_path = config_folder / "export" / BLOCKCHAIN_RAW;
-  LOG_PRINT_L0("Export output file: " << output_file_path.string());
+  oxen::log::warning(logcat, "Export output file: {}", output_file_path.string());
 
-  LOG_PRINT_L0("Initializing source blockchain (BlockchainDB)");
+  oxen::log::warning(logcat, "Initializing source blockchain (BlockchainDB)");
   blockchain_objects_t blockchain_objects = {};
   Blockchain *core_storage = &blockchain_objects.m_blockchain;
   BlockchainDB *db = new_db();
   if (db == NULL)
   {
-    LOG_ERROR("Failed to initialize a database");
+    oxen::log::error(logcat, "Failed to initialize a database");
     throw std::runtime_error("Failed to initialize a database");
   }
-  LOG_PRINT_L0("database: LMDB");
+  oxen::log::warning(logcat, "database: LMDB");
 
   auto filename = config_folder / db->get_db_name();
 
-  LOG_PRINT_L0("Loading blockchain from folder " << filename << " ...");
+  oxen::log::warning(logcat, "Loading blockchain from folder {} ...", filename);
   try
   {
     db->open(filename, core_storage->nettype(), DBF_RDONLY);
   }
   catch (const std::exception& e)
   {
-    LOG_PRINT_L0("Error opening database: " << e.what());
+    oxen::log::warning(logcat, "Error opening database: {}", e.what());
     return 1;
   }
   r = core_storage->init(db, nullptr, opt_testnet ? cryptonote::network_type::TESTNET : opt_devnet ? cryptonote::network_type::DEVNET : cryptonote::network_type::MAINNET);
 
   if (core_storage->get_blockchain_pruning_seed() && !opt_blocks_dat)
   {
-    LOG_PRINT_L0("Blockchain is pruned, cannot export");
+    oxen::log::warning(logcat, "Blockchain is pruned, cannot export");
     return 1;
   }
 
   CHECK_AND_ASSERT_MES(r, 1, "Failed to initialize source blockchain storage");
-  LOG_PRINT_L0("Source blockchain storage initialized OK");
-  LOG_PRINT_L0("Exporting blockchain raw data...");
+  oxen::log::warning(logcat, "Source blockchain storage initialized OK");
+  oxen::log::warning(logcat, "Exporting blockchain raw data...");
 
   if (opt_blocks_dat)
   {
@@ -165,7 +167,7 @@ int main(int argc, char* argv[])
     r = bootstrap.store_blockchain_raw(core_storage, NULL, output_file_path, block_stop);
   }
   CHECK_AND_ASSERT_MES(r, 1, "Failed to export blockchain raw data");
-  LOG_PRINT_L0("Blockchain raw data exported OK");
+  oxen::log::warning(logcat, "Blockchain raw data exported OK");
   return 0;
 
   CATCH_ENTRY("Export error", 1);

@@ -35,11 +35,12 @@
 #include "cryptonote_core/uptime_proof.h"
 #include "version.h"
 
-#undef BELDEX_DEFAULT_LOG_CATEGORY
-#define BELDEX_DEFAULT_LOG_CATEGORY "bcutil"
+#include <fmt/std.h>
 
 namespace po = boost::program_options;
 using namespace cryptonote;
+
+static auto logcat = oxen::log::Cat("quorum_cop");
 
 struct output_data
 {
@@ -78,11 +79,7 @@ int main(int argc, char* argv[])
   TRY_ENTRY();
 
   epee::string_tools::set_module_name_and_folder(argv[0]);
-
-  uint32_t log_level = 0;
-
   tools::on_startup();
-
   auto opt_size = command_line::boost_option_sizes();
 
   po::options_description desc_cmd_only("Command line options", opt_size.first, opt_size.second);
@@ -122,13 +119,17 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  mlog_configure(mlog_get_default_log_path("beldex-blockchain-usage.log"), true);
-  if (!command_line::is_arg_defaulted(vm, arg_log_level))
-    mlog_set_log(command_line::get_arg(vm, arg_log_level).c_str());
-  else
-    mlog_set_log(std::string(std::to_string(log_level) + ",bcutil:INFO").c_str());
-
-  LOG_PRINT_L0("Starting...");
+  auto m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
+  auto log_file_path = m_config_folder + "beldex-blockchain-usage.log";
+  oxen::log::Level log_level;
+  if(auto level = beldex::logging::parse_level(command_line::get_arg(vm, arg_log_level).c_str())) {
+    log_level = *level;
+  } else {
+      std::cerr << "Incorrect log level: " << command_line::get_arg(vm, arg_log_level).c_str() << std::endl;
+      throw std::runtime_error{"Incorrect log level"};
+  }
+  beldex::logging::init(log_file_path, log_level);
+  oxen::log::warning(logcat, "Starting...");
 
   bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
   bool opt_devnet = command_line::get_arg(vm, cryptonote::arg_devnet_on);
@@ -146,7 +147,7 @@ int main(int argc, char* argv[])
   //   Blockchain* core_storage = new Blockchain(NULL);
   // because unlike blockchain_storage constructor, which takes a pointer to
   // tx_memory_pool, Blockchain's constructor takes tx_memory_pool object.
-  LOG_PRINT_L0("Initializing source blockchain (BlockchainDB)");
+  oxen::log::warning(logcat, "Initializing source blockchain (BlockchainDB)");
   const std::string input = command_line::get_arg(vm, arg_input);
   blockchain_objects_t blockchain_objects = {};
   Blockchain *core_storage = &blockchain_objects.m_blockchain;
@@ -154,13 +155,13 @@ int main(int argc, char* argv[])
   BlockchainDB *db = new_db();
   if (db == NULL)
   {
-    LOG_ERROR("Failed to initialize a database");
+    oxen::log::error(logcat, "Failed to initialize a database");
     throw std::runtime_error("Failed to initialize a database");
   }
-  LOG_PRINT_L0("database: LMDB");
+  oxen::log::warning(logcat, "database: LMDB");
 
   const fs::path filename = fs::u8path(input);
-  LOG_PRINT_L0("Loading blockchain from folder " << filename << " ...");
+  oxen::log::warning(logcat, "Loading blockchain from folder {} ...", filename);
 
   try
   {
@@ -168,22 +169,22 @@ int main(int argc, char* argv[])
   }
   catch (const std::exception& e)
   {
-    LOG_PRINT_L0("Error opening database: " << e.what());
+    oxen::log::warning(logcat, "Error opening database: {}", e.what());
     return 1;
   }
 
   r = core_storage->init(db, nullptr /*bns_db*/, net_type);
 
   CHECK_AND_ASSERT_MES(r, 1, "Failed to initialize source blockchain storage");
-  LOG_PRINT_L0("Source blockchain storage initialized OK");
+  oxen::log::warning(logcat, "Source blockchain storage initialized OK");
 
-  LOG_PRINT_L0("Building usage patterns...");
+  oxen::log::warning(logcat, "Building usage patterns...");
 
   size_t done = 0;
   std::unordered_map<output_data, std::list<reference>> outputs;
   std::unordered_map<uint64_t,uint64_t> indices;
 
-  LOG_PRINT_L0("Reading blockchain from " << input);
+  oxen::log::warning(logcat, "Reading blockchain from {}", input);
   core_storage->for_all_transactions([&](const crypto::hash &hash, const cryptonote::transaction &tx)->bool
   {
     const bool coinbase = tx.vin.size() == 1 && std::holds_alternative<txin_gen>(tx.vin[0]);
@@ -228,15 +229,15 @@ int main(int argc, char* argv[])
     for (const auto &c: counts)
     {
       float percent = 100.f * c.second / total;
-      MINFO(std::to_string(c.second) << " outputs used " << c.first << " times (" << percent << "%)");
+      oxen::log::info(logcat, "{} outputs used {} times ({}%)", std::to_string(c.second), c.first, percent);
     }
   }
   else
   {
-    MINFO("No outputs to process");
+    oxen::log::info(logcat, "No outputs to process");
   }
 
-  LOG_PRINT_L0("Blockchain usage exported OK");
+  oxen::log::warning(logcat, "Blockchain usage exported OK");
   return 0;
 
   CATCH_ENTRY("Export error", 1);

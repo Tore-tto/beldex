@@ -46,9 +46,9 @@
 #include "wallet/ringdb.h"
 #include "version.h"
 #include "cryptonote_core/uptime_proof.h"
+#include <fmt/std.h>
 
-#undef BELDEX_DEFAULT_LOG_CATEGORY
-#define BELDEX_DEFAULT_LOG_CATEGORY "bcutil"
+static auto logcat = oxen::log::Cat("bcutil");
 
 namespace po = boost::program_options;
 using namespace cryptonote;
@@ -90,7 +90,7 @@ static bool parse_db_sync_mode(std::string db_sync_mode)
   auto options = tools::split_any(db_sync_mode, " :", true);
 
   for(const auto &option : options)
-    MDEBUG("option: " << option);
+    oxen::log::debug(logcat, "option: {}", option);
 
   // default to fast:async:1
   uint64_t DEFAULT_FLAGS = DBF_FAST;
@@ -206,14 +206,14 @@ static int resize_env(const char *db_path)
       auto si = fs::space(fs::u8path(db_path));
       if(si.available < needed)
       {
-        MERROR("!! WARNING: Insufficient free space to extend database !!: " << (si.available / 1000000) << " MB available");
+        oxen::log::error(logcat, "!! WARNING: Insufficient free space to extend database !!: {} MB available", (si.available / 1000000));
         return ENOSPC;
       }
     }
     catch(...)
     {
       // print something but proceed.
-      MWARNING("Unable to query free disk space.");
+      oxen::log::warning(logcat, "Unable to query free disk space.");
     }
 
     mapsize += needed;
@@ -227,11 +227,11 @@ static void init(fs::path cache_filename)
   bool tx_active = false;
   int dbr;
 
-  MINFO("Creating spent output cache in " << cache_filename);
+  oxen::log::info(logcat, "Creating spent output cache in {}", cache_filename);
 
   std::error_code ec;
   if (fs::create_directories(cache_filename, ec); ec)
-    MWARNING("Failed to create output cache directory " << cache_filename << ": " << ec.message());
+    oxen::log::warning(logcat, "Failed to create output cache directory {}: {}", cache_filename, ec.message());
 
   int flags = 0;
   if (db_flags & DBF_FAST)
@@ -392,7 +392,7 @@ static bool for_all_transactions(const fs::path& filename, uint64_t& start_idx, 
       std::string_view bd{static_cast<const char*>(v.mv_data), v.mv_size};
       serialization::parse_binary(bd, tx);
     } catch (const std::exception& e) {
-      LOG_ERROR("Failed to parse transaction from blob: " << e.what());
+      oxen::log::error(logcat, "Failed to parse transaction from blob: {}", e.what());
       return false;
     }
 
@@ -607,7 +607,7 @@ static std::vector<uint64_t> canonicalize(const std::vector<uint64_t> &v)
   }
   if (c.size() < v.size())
   {
-    MINFO("Ring has duplicate member(s): " << tools::join(" ", v));
+    oxen::log::info(logcat, "Ring has duplicate member(s): {}", tools::join(" ", v));
   }
   return c;
 }
@@ -955,7 +955,7 @@ static void open_db(const fs::path& filename, MDB_env** env, MDB_txn** txn, MDB_
 {
   std::error_code ec;
   if (fs::create_directories(filename, ec); ec)
-    MWARNING("Failed to create lmdb path " << filename << ": " << ec.message());
+    oxen::log::warning(logcat, "Failed to create lmdb path {}: {}", filename, ec.message());
 
   int flags = MDB_RDONLY;
   if (db_flags & DBF_FAST)
@@ -967,7 +967,7 @@ static void open_db(const fs::path& filename, MDB_env** env, MDB_txn** txn, MDB_
   CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to create LDMB environment: " + std::string(mdb_strerror(dbr)));
   dbr = mdb_env_set_maxdbs(*env, 1);
   CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to set max env dbs: " + std::string(mdb_strerror(dbr)));
-  MINFO("Opening beldex blockchain at " << filename);
+  oxen::log::info(logcat, "Opening beldex blockchain at {}", filename);
   dbr = mdb_env_open(*env, filename.string().c_str(), flags, 0664);
   CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to open rings database file '"
       + filename.u8string() + "': " + std::string(mdb_strerror(dbr)));
@@ -1065,7 +1065,7 @@ static std::vector<std::pair<uint64_t, uint64_t>> load_outputs(const fs::path& f
 
   if (!f)
   {
-    MERROR("Failed to load outputs from " << filename << ": " << strerror(errno));
+    oxen::log::error(logcat, "Failed to load outputs from {}: {}", filename, strerror(errno));
     return {};
   }
   while (1)
@@ -1073,7 +1073,7 @@ static std::vector<std::pair<uint64_t, uint64_t>> load_outputs(const fs::path& f
     char s[256];
     if (!fgets(s, sizeof(s), f))
     {
-      MERROR("Error reading from " << filename << ": " << strerror(errno));
+      oxen::log::error(logcat, "Error reading from {}: {}", filename, strerror(errno));
       break;
     }
     if (feof(f))
@@ -1091,7 +1091,7 @@ static std::vector<std::pair<uint64_t, uint64_t>> load_outputs(const fs::path& f
     }
     if (amount == std::numeric_limits<uint64_t>::max())
     {
-      MERROR("Bad format in " << filename);
+      oxen::log::error(logcat, "Bad format in {}", filename);
       continue;
     }
     if (sscanf(s, "%" PRIu64 "*%" PRIu64, &offset, &num_offsets) == 2 && num_offsets < std::numeric_limits<uint64_t>::max() - offset)
@@ -1105,7 +1105,7 @@ static std::vector<std::pair<uint64_t, uint64_t>> load_outputs(const fs::path& f
     }
     else
     {
-      MERROR("Bad format in " << filename);
+      oxen::log::error(logcat, "Bad format in {}", filename);
       continue;
     }
   }
@@ -1124,7 +1124,7 @@ static bool export_spent_outputs(MDB_cursor* cur, const fs::path& filename)
 
   if (!f)
   {
-    MERROR("Failed to open " << filename << ": " << strerror(errno));
+    oxen::log::error(logcat, "Failed to open {}: {}", filename, strerror(errno));
     return false;
   }
 
@@ -1141,7 +1141,7 @@ static bool export_spent_outputs(MDB_cursor* cur, const fs::path& filename)
     if (dbr)
     {
       fclose(f);
-      MERROR("Failed to enumerate spent outputs: " << mdb_strerror(dbr));
+      oxen::log::error(logcat, "Failed to enumerate spent outputs: {}", mdb_strerror(dbr));
       return false;
     }
     const uint64_t amount = *(const uint64_t*)k.mv_data;
@@ -1178,8 +1178,6 @@ int main(int argc, char* argv[])
   TRY_ENTRY();
 
   epee::string_tools::set_module_name_and_folder(argv[0]);
-
-  uint32_t log_level = 0;
 
   tools::on_startup();
 
@@ -1243,13 +1241,17 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  mlog_configure(mlog_get_default_log_path("beldex-blockchain-mark-spent-outputs.log"), true);
-  if (!command_line::is_arg_defaulted(vm, arg_log_level))
-    mlog_set_log(command_line::get_arg(vm, arg_log_level).c_str());
-  else
-    mlog_set_log(std::string(std::to_string(log_level) + ",bcutil:INFO").c_str());
-
-  LOG_PRINT_L0("Starting...");
+  auto m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
+  auto log_file_path = m_config_folder + "beldex-blockchain-mark-spent-outputs.log";
+  oxen::log::Level log_level;
+  if(auto level = oxen::logging::parse_level(command_line::get_arg(vm, arg_log_level).c_str())) {
+    log_level = *level;
+  } else {
+      std::cerr << "Incorrect log level: " << command_line::get_arg(vm, arg_log_level).c_str() << std::endl;
+      throw std::runtime_error{"Incorrect log level"};
+  }
+  oxen::logging::init(log_file_path, log_level);
+  oxen::log::warning(logcat, "Starting...");
 
   fs::path output_file_path = fs::u8path(command_line::get_arg(vm, arg_blackball_db_dir));
   bool opt_rct_only = command_line::get_arg(vm, arg_rct_only);
@@ -1265,7 +1267,7 @@ int main(int argc, char* argv[])
   std::string db_sync_mode = command_line::get_arg(vm, arg_db_sync_mode);
   if (!parse_db_sync_mode(db_sync_mode))
   {
-    MERROR("Invalid db sync mode: " << db_sync_mode);
+    oxen::log::error(logcat, "Invalid db sync mode: {}", db_sync_mode);
     return 1;
   }
 
@@ -1274,7 +1276,7 @@ int main(int argc, char* argv[])
     inputs.push_back(fs::u8path(in));
   if (inputs.empty())
   {
-    LOG_PRINT_L0("No inputs given");
+    oxen::log::warning(logcat, "No inputs given");
     return 1;
   }
 
@@ -1288,7 +1290,7 @@ int main(int argc, char* argv[])
   fs::path cache_dir = output_file_path / "spent-outputs-cache";
   init(cache_dir);
 
-  LOG_PRINT_L0("Scanning for spent outputs...");
+  oxen::log::warning(logcat, "Scanning for spent outputs...");
 
   size_t done = 0;
 
@@ -1317,7 +1319,7 @@ int main(int argc, char* argv[])
   {
     if (!start_blackballed_outputs)
     {
-      MINFO("Spent outputs database is empty. Either you haven't run the analysis mode yet, or there is really no output marked as spent.");
+      oxen::log::info(logcat, "Spent outputs database is empty. Either you haven't run the analysis mode yet, or there is really no output marked as spent.");
       goto skip_secondary_passes;
     }
     MDB_txn *txn;
@@ -1342,7 +1344,7 @@ int main(int argc, char* argv[])
         {
           uint64_t window_front = (height / STAT_WINDOW - 1) * STAT_WINDOW;
           uint64_t window_back = window_front + STAT_WINDOW - 1;
-          LOG_PRINT_L0(window_front << "-" << window_back << ": " << (100.0f * outs_spent / outs_total) << "% ( " << outs_spent << " / " << outs_total << " )");
+          oxen::log::warning(logcat, "{}-{}: {}% ( {} / {} )", window_front, window_back, (100.0f * outs_spent / outs_total), outs_spent, outs_total);
           outs_total = outs_spent = 0;
         }
       }
@@ -1359,11 +1361,11 @@ int main(int argc, char* argv[])
       {
         uint64_t window_front = (height / STAT_WINDOW) * STAT_WINDOW;
         uint64_t window_back = height;
-        LOG_PRINT_L0(window_front << "-" << window_back << ": " << (100.0f * outs_spent / outs_total) << "% ( " << outs_spent << " / " << outs_total << " )");
+        oxen::log::warning(logcat, "{}-{}: {}% ( {} / {} )", window_front, window_back, (100.0f * outs_spent / outs_total), outs_spent, outs_total);
       }
       if (stop_requested)
       {
-        MINFO("Stopping scan...");
+        oxen::log::info(logcat, "Stopping scan...");
         return false;
       }
       return true;
@@ -1376,7 +1378,7 @@ int main(int argc, char* argv[])
 
   if (!extra_spent_outputs.empty())
   {
-    MINFO("Adding " << extra_spent_outputs.size() << " extra spent outputs");
+    oxen::log::info(logcat, "Adding {} extra spent outputs", extra_spent_outputs.size());
     MDB_txn *txn;
     int dbr = mdb_txn_begin(env, NULL, 0, &txn);
     CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to create LMDB transaction: " + std::string(mdb_strerror(dbr)));
@@ -1411,9 +1413,9 @@ int main(int argc, char* argv[])
     if (n > 0 && start_idx == 0)
     {
       start_idx = find_first_diverging_transaction(inputs[0], inputs[n]);
-      LOG_PRINT_L0("First diverging transaction at " << start_idx);
+      oxen::log::warning(logcat, "First diverging transaction at {}", start_idx);
     }
-    LOG_PRINT_L0("Reading blockchain from " << inputs[n] << " from " << start_idx);
+    oxen::log::warning(logcat, "Reading blockchain from {} from {}", inputs[n], start_idx);
     MDB_txn *txn;
     int dbr = mdb_txn_begin(env, NULL, 0, &txn);
     CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to create LMDB transaction: " + std::string(mdb_strerror(dbr)));
@@ -1450,7 +1452,7 @@ int main(int argc, char* argv[])
           const std::pair<uint64_t, uint64_t> output = std::make_pair(txin.amount, absolute[0]);
           if (opt_verbose)
           {
-            MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to being used in a 1-ring");
+            oxen::log::info(logcat, "Marking output {}/{} as spent, due to being used in a 1-ring", output.first, output.second);
             std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
           }
           blackballs.push_back(output);
@@ -1464,7 +1466,7 @@ int main(int argc, char* argv[])
             const std::pair<uint64_t, uint64_t> output = std::make_pair(txin.amount, absolute[o]);
             if (opt_verbose)
             {
-              MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to being used in " << new_ring.size() << " identical " << new_ring.size() << "-rings");
+              oxen::log::info(logcat, "Marking output {}/{} as spent, due to being used in {} identical {}-rings", output.first, output.second, new_ring.size(), new_ring.size());
               std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
             }
             blackballs.push_back(output);
@@ -1479,7 +1481,7 @@ int main(int argc, char* argv[])
             const std::pair<uint64_t, uint64_t> output = std::make_pair(txin.amount, o);
             if (opt_verbose)
             {
-              MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to as many outputs of that amount being spent as exist so far");
+              oxen::log::info(logcat, "Marking output {}/{} as spent, due to as many outputs of that amount being spent as exist so far", output.first, output.second);
               std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
             }
             blackballs.push_back(output);
@@ -1494,7 +1496,7 @@ int main(int argc, char* argv[])
             const std::pair<uint64_t, uint64_t> output = std::make_pair(txin.amount, absolute[o]);
             if (opt_verbose)
             {
-              MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to being used in " << new_ring.size() << " subsets of " << new_ring.size() << "-rings");
+              oxen::log::info(logcat, "Marking output {}/{} as spent, due to being used in {} subsets of {}-rings", output.first, output.second, new_ring.size(), new_ring.size());
               std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
             }
             blackballs.push_back(output);
@@ -1504,12 +1506,11 @@ int main(int argc, char* argv[])
         }
         else if (n > 0 && get_relative_ring(txn, txin.k_image, relative_ring))
         {
-          MDEBUG("Key image " << txin.k_image << " already seen: "
-              "rings " << tools::join(" ", relative_ring) << ", " << tools::join(" ", txin.key_offsets));
+          oxen::log::debug(logcat, "Key image {} already seen: rings {}, {}", txin.k_image, tools::join(" ", relative_ring), tools::join(" ", txin.key_offsets));
           std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
           if (relative_ring != txin.key_offsets)
           {
-            MDEBUG("Rings are different");
+            oxen::log::debug(logcat, "Rings are different");
             std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
             const std::vector<uint64_t> r0 = cryptonote::relative_output_offsets_to_absolute(relative_ring);
             const std::vector<uint64_t> r1 = cryptonote::relative_output_offsets_to_absolute(txin.key_offsets);
@@ -1521,7 +1522,7 @@ int main(int argc, char* argv[])
             }
             if (common.empty())
             {
-              MERROR("Rings for the same key image are disjoint");
+              oxen::log::error(logcat, "Rings for the same key image are disjoint");
               std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
             }
             else if (common.size() == 1)
@@ -1529,7 +1530,7 @@ int main(int argc, char* argv[])
               const std::pair<uint64_t, uint64_t> output = std::make_pair(txin.amount, common[0]);
               if (opt_verbose)
               {
-                MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to being used in rings with a single common element");
+                oxen::log::info(logcat, "Marking output {}/{} as spent, due to being used in rings with a single common element", output.first, output.second);
                 std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
               }
               blackballs.push_back(output);
@@ -1538,7 +1539,7 @@ int main(int argc, char* argv[])
             }
             else
             {
-              MDEBUG("The intersection has more than one element, it's still ok");
+              oxen::log::debug(logcat, "The intersection has more than one element, it's still ok");
               std::cout << "\r" << start_idx << "/" << n_txes << "         \r" << std::flush;
               for (const auto &out: r0)
                 if (std::find(common.begin(), common.end(), out) != common.end())
@@ -1594,7 +1595,7 @@ int main(int argc, char* argv[])
 
       if (stop_requested)
       {
-        MINFO("Stopping scan...");
+        oxen::log::info(logcat, "Stopping scan...");
         return false;
       }
       return true;
@@ -1602,7 +1603,7 @@ int main(int argc, char* argv[])
     mdb_cursor_close(cur);
     dbr = mdb_txn_commit(txn);
     CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to commit txn creating/opening database: " + std::string(mdb_strerror(dbr)));
-    LOG_PRINT_L0("blockchain from " << inputs[n] << " processed till tx idx " << start_idx);
+    oxen::log::warning(logcat, "blockchain from {} processed till tx idx {}", inputs[n], start_idx);
     if (stop_requested)
       break;
   }
@@ -1621,7 +1622,7 @@ int main(int argc, char* argv[])
 
   while (!work_spent.empty())
   {
-    LOG_PRINT_L0("Secondary pass on " << work_spent.size() << " spent outputs");
+    oxen::log::warning(logcat, "Secondary pass on {} spent outputs", work_spent.size());
 
     int dbr = resize_env(cache_dir.string().c_str());
     CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to resize LMDB database: " + std::string(mdb_strerror(dbr)));
@@ -1659,8 +1660,7 @@ int main(int argc, char* argv[])
           const std::pair<uint64_t, uint64_t> output = std::make_pair(od.amount, last_unknown);
           if (opt_verbose)
           {
-            MINFO("Marking output " << output.first << "/" << output.second << " as spent, due to being used in a " <<
-                absolute.size() << "-ring where all other outputs are known to be spent");
+            oxen::log::info(logcat, "Marking output {}/{} as spent, due to being used in a {}-ring where all other outputs are known to be spent", output.first, output.second, absolute.size());
           }
           blackballs.push_back(output);
           if (add_spent_output(cur, output_data(od.amount, last_unknown)))
@@ -1671,7 +1671,7 @@ int main(int argc, char* argv[])
 
       if (stop_requested)
       {
-        MINFO("Stopping secondary passes. Secondary passes are not incremental, they will re-run fully.");
+        oxen::log::info(logcat, "Stopping secondary passes. Secondary passes are not incremental, they will re-run fully.");
         return 0;
       }
     }
@@ -1687,15 +1687,15 @@ int main(int argc, char* argv[])
 
 skip_secondary_passes:
   uint64_t diff = get_num_spent_outputs() - start_blackballed_outputs;
-  LOG_PRINT_L0(std::to_string(diff) << " new outputs marked as spent, " << get_num_spent_outputs() << " total outputs marked as spent");
+  oxen::log::warning(logcat, "{} new outputs marked as spent, {} total outputs marked as spent", std::to_string(diff), get_num_spent_outputs());
 
   MDB_txn *txn;
   dbr = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
   CHECK_AND_ASSERT_THROW_MES(!dbr, "Failed to create LMDB transaction: " + std::string(mdb_strerror(dbr)));
   uint64_t pre_rct = 0, rct = 0;
   get_num_outputs(txn0, cur0, dbi0, pre_rct, rct);
-  MINFO("Total pre-rct outputs: " << pre_rct);
-  MINFO("Total rct outputs: " << rct);
+  oxen::log::info(logcat, "Total pre-rct outputs: {}", pre_rct);
+  oxen::log::info(logcat, "Total rct outputs: {}", rct);
   static const struct { const char *key; uint64_t base; } stat_keys[] = {
     { "pre-rct-ring-size-1", pre_rct }, { "rct-ring-size-1", rct },
     { "pre-rct-duplicate-rings", pre_rct }, { "rct-duplicate-rings", rct },
@@ -1711,7 +1711,7 @@ skip_secondary_passes:
     if (!get_stat(txn, key.key, data))
       data = 0;
     float percent = key.base ? 100.0f * data / key.base : 0.0f;
-    MINFO(key.key << ": " << data << " (" << percent << "%)");
+    oxen::log::info(logcat, "{}: {} ({}%)", key.key, data, percent);
   }
   mdb_txn_abort(txn);
 
@@ -1728,7 +1728,7 @@ skip_secondary_passes:
     mdb_txn_abort(txn);
   }
 
-  LOG_PRINT_L0("Blockchain spent output data exported OK");
+  oxen::log::warning(logcat, "Blockchain spent output data exported OK");
   close_db(env0, txn0, cur0, dbi0);
   close();
   return 0;

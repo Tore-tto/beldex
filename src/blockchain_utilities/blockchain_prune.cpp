@@ -39,8 +39,7 @@
 #include "blockchain_objects.h"
 #include "version.h"
 
-#undef BELDEX_DEFAULT_LOG_CATEGORY
-#define BELDEX_DEFAULT_LOG_CATEGORY "bcutil"
+static auto logcat = oxen::log::Cat("bcutil");
 
 #define MDB_val_set(var, val)   MDB_val var = {sizeof(val), (void *)&val}
 
@@ -57,7 +56,7 @@ static std::error_code replace_file(const fs::path& replacement_name, const fs::
 {
   std::error_code ec = fs::rename(replacement_name, replaced_name);
   if (ec)
-    MERROR("Error renaming " << replacement_name << " to " << replaced_name << ": " << ec.message());
+    oxen::log::error(logcat, "Error renaming {} to {}: {}", replacement_name, replaced_name, ec.message());
   return ec;
 }
 
@@ -94,7 +93,7 @@ static void add_size(MDB_env *env, uint64_t bytes)
     auto si = fs::space(db_path);
     if(si.available < bytes)
     {
-      MERROR("!! WARNING: Insufficient free space to extend database !!: " <<
+      oxen::log::error(logcat, "!! WARNING: Insufficient free space to extend database !!: ", 
           (si.available >> 20L) << " MB available, " << (bytes >> 20L) << " MB needed");
       return;
     }
@@ -102,7 +101,7 @@ static void add_size(MDB_env *env, uint64_t bytes)
   catch(...)
   {
     // print something but proceed.
-    MWARNING("Unable to query free disk space.");
+    oxen::log::warning(logcat, "Unable to query free disk space.");
   }
 
   MDB_envinfo mei;
@@ -117,7 +116,7 @@ static void add_size(MDB_env *env, uint64_t bytes)
   if (result)
     throw std::runtime_error("Failed to set new mapsize to " + std::to_string(new_mapsize) + ": " + std::string(mdb_strerror(result)));
 
-  MGINFO("LMDB Mapsize increased." << "  Old: " << mei.me_mapsize / (1024 * 1024) << "MiB" << ", New: " << new_mapsize / (1024 * 1024) << "MiB");
+  oxen::log::info(logcat, "LMDB Mapsize increased.  Old: {}MiB, New: {}MiB", mei.me_mapsize / (1024 * 1024), new_mapsize / (1024 * 1024));
 }
 
 static void check_resize(MDB_env *env, size_t bytes)
@@ -154,7 +153,7 @@ static void copy_table(MDB_env *env0, MDB_env *env1, const char *table, unsigned
   bool tx_active0 = false, tx_active1 = false;
   int dbr;
 
-  MINFO("Copying " << table);
+  oxen::log::info(logcat, "Copying {}", table);
 
   BELDEX_DEFER {
     if (tx_active1) mdb_txn_abort(txn1);
@@ -251,7 +250,7 @@ static void prune(MDB_env *env0, MDB_env *env1)
   bool tx_active0 = false, tx_active1 = false;
   int dbr;
 
-  MGINFO("Creating pruned txs_prunable");
+  oxen::log::info(logcat, "Creating pruned txs_prunable");
 
   BELDEX_DEFER {
     if (tx_active1) mdb_txn_abort(txn1);
@@ -336,7 +335,7 @@ static void prune(MDB_env *env0, MDB_env *env1)
     MDB_val_set(kk, ti->data.tx_id);
     if (block_height + PRUNING_TIP_BLOCKS >= blockchain_height)
     {
-      MDEBUG(block_height << "/" << blockchain_height << " is in tip");
+      oxen::log::debug(logcat, "{}/{} is in tip", block_height, blockchain_height);
       MDB_val_set(vv, block_height);
       dbr = mdb_cursor_put(cur1_txs_prunable_tip, &kk, &vv, 0);
       if (dbr) throw std::runtime_error("Failed to write prunable tx tip data: " + std::string(mdb_strerror(dbr)));
@@ -360,7 +359,7 @@ static void prune(MDB_env *env0, MDB_env *env1)
     }
     else
     {
-      MDEBUG("" << block_height << "/" << blockchain_height << " should be pruned, dropping");
+      oxen::log::debug(logcat, "{}/{} should be pruned, dropping", block_height, blockchain_height);
     }
   }
 
@@ -386,7 +385,7 @@ static bool parse_db_sync_mode(std::string db_sync_mode, uint64_t &db_flags)
   auto options = tools::split_any(db_sync_mode, " :", true);
 
   for(const auto &option : options)
-    MDEBUG("option: " << option);
+    oxen::log::debug(logcat, "option: {}", option);
 
   // default to fast:async:1
   uint64_t DEFAULT_FLAGS = DBF_FAST;
@@ -490,7 +489,7 @@ int main(int argc, char* argv[])
   else
     mlog_set_log(std::string(std::to_string(log_level) + ",bcutil:INFO").c_str());
 
-  MINFO("Starting...");
+  oxen::log::info(logcat, "Starting...");
 
   bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
   bool opt_devnet = command_line::get_arg(vm, cryptonote::arg_devnet_on);
@@ -504,7 +503,7 @@ int main(int argc, char* argv[])
   uint64_t db_flags = 0;
   if (!parse_db_sync_mode(db_sync_mode, db_flags))
   {
-    MERROR("Invalid db sync mode: " << db_sync_mode);
+    oxen::log::error(logcat, "Invalid db sync mode: {}", db_sync_mode);
     return 1;
   }
 
@@ -519,7 +518,7 @@ int main(int argc, char* argv[])
   //   Blockchain* core_storage = new Blockchain(NULL);
   // because unlike blockchain_storage constructor, which takes a pointer to
   // tx_memory_pool, Blockchain's constructor takes tx_memory_pool object.
-  MINFO("Initializing source blockchain (BlockchainDB)");
+  oxen::log::info(logcat, "Initializing source blockchain (BlockchainDB)");
   std::array<Blockchain *, 2> core_storage;
   fs::path paths[2];
   bool already_pruned = false;
@@ -531,7 +530,7 @@ int main(int argc, char* argv[])
     BlockchainDB* db = new_db();
     if (db == NULL)
     {
-      MERROR("Failed to initialize a database");
+      oxen::log::error(logcat, "Failed to initialize a database");
       throw std::runtime_error("Failed to initialize a database");
     }
 
@@ -542,7 +541,7 @@ int main(int argc, char* argv[])
       {
         if (!fs::is_directory(paths[1]))
         {
-          MERROR("LMDB needs a directory path, but a file was passed: " << paths[1].string());
+          oxen::log::error(logcat, "LMDB needs a directory path, but a file was passed: {}", paths[1].string());
           return 1;
         }
       }
@@ -550,7 +549,7 @@ int main(int argc, char* argv[])
       {
         if (!fs::create_directories(paths[1]))
         {
-          MERROR("Failed to create directory: " << paths[1].string());
+          oxen::log::error(logcat, "Failed to create directory: {}", paths[1].string());
           return 1;
         }
       }
@@ -561,7 +560,7 @@ int main(int argc, char* argv[])
       paths[0] = fs::u8path(data_dir) / db->get_db_name();
     }
 
-    MINFO("Loading blockchain from folder " << paths[n] << " ...");
+    oxen::log::info(logcat, "Loading blockchain from folder {} ...", paths[n]);
 
     try
     {
@@ -569,19 +568,19 @@ int main(int argc, char* argv[])
     }
     catch (const std::exception& e)
     {
-      MERROR("Error opening database: " << e.what());
+      oxen::log::error(logcat, "Error opening database: {}", e.what());
       return 1;
     }
     r = core_storage[n]->init(db, nullptr /*bns_db*/, net_type);
 
     std::string source_dest = n == 0 ? "source" : "pruned";
     CHECK_AND_ASSERT_MES(r, 1, "Failed to initialize " << source_dest << " blockchain storage");
-    MINFO(source_dest << " blockchain storage initialized OK");
+    oxen::log::info(logcat, "{} blockchain storage initialized OK", source_dest);
     if (n == 0 && core_storage[0]->get_blockchain_pruning_seed())
     {
       if (!opt_copy_pruned_database)
       {
-        MERROR("Blockchain is already pruned, use --" << arg_copy_pruned_database.name << " to copy it anyway");
+        oxen::log::error(logcat, "Blockchain is already pruned, use --{} to copy it anyway", arg_copy_pruned_database.name);
         return 1;
       }
       already_pruned = true;
@@ -592,7 +591,7 @@ int main(int argc, char* argv[])
   core_storage[1]->deinit();
   delete core_storage[1];
 
-  MINFO("Pruning...");
+  oxen::log::info(logcat, "Pruning...");
   MDB_env *env0 = NULL, *env1 = NULL;
   open(env0, paths[0], db_flags, true);
   open(env1, paths[1], db_flags, false);
@@ -624,16 +623,16 @@ int main(int argc, char* argv[])
   close(env1);
   close(env0);
 
-  MINFO("Swapping databases, pre-pruning blockchain will be left in " << paths[0].string() + "-old and can be removed if desired");
+  oxen::log::info(logcat, "Swapping databases, pre-pruning blockchain will be left in {}", paths[0].string() + "-old and can be removed if desired");
   fs::path old = paths[0];
   old += "-old";
   if (replace_file(paths[0], old) || replace_file(paths[1], paths[0]))
   {
-    MERROR("Blockchain pruned OK, but renaming failed");
+    oxen::log::error(logcat, "Blockchain pruned OK, but renaming failed");
     return 1;
   }
 
-  MINFO("Blockchain pruned OK");
+  oxen::log::info(logcat, "Blockchain pruned OK");
   return 0;
 
   CATCH_ENTRY("Pruning error", 1);

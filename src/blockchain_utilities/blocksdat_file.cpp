@@ -28,9 +28,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "blocksdat_file.h"
+#include <fmt/std.h>
 
-#undef BELDEX_DEFAULT_LOG_CATEGORY
-#define BELDEX_DEFAULT_LOG_CATEGORY "bcutil"
 
 namespace po = boost::program_options;
 
@@ -38,6 +37,7 @@ using namespace cryptonote;
 
 namespace
 {
+  static auto logcat = oxen::log::Cat("bcutil");
   std::string refresh_string = "\r                                    \r";
 }
 
@@ -52,7 +52,7 @@ bool BlocksdatFile::open_writer(const fs::path& file_path, uint64_t block_stop)
     {
       if (!fs::is_directory(dir_path))
       {
-        MFATAL("export directory path is a file: " << dir_path);
+        oxen::log::error(logcat, "export directory path is a file: {}", dir_path);
         return false;
       }
     }
@@ -60,7 +60,7 @@ bool BlocksdatFile::open_writer(const fs::path& file_path, uint64_t block_stop)
     {
       if (!fs::create_directory(dir_path))
       {
-        MFATAL("Failed to create directory " << dir_path);
+        oxen::log::error(logcat, "Failed to create directory {}", dir_path);
         return false;
       }
     }
@@ -68,7 +68,7 @@ bool BlocksdatFile::open_writer(const fs::path& file_path, uint64_t block_stop)
 
   m_raw_data_file = new std::ofstream();
 
-  MINFO("creating file");
+  oxen::log::info(logcat, "creating file");
 
   m_raw_data_file->open(file_path.string(), std::ios_base::binary | std::ios_base::out | std::ios::trunc);
   if (m_raw_data_file->fail())
@@ -133,21 +133,21 @@ bool BlocksdatFile::store_blockchain_raw(Blockchain* _blockchain_storage, tx_mem
 
   uint64_t block_start = 0;
   uint64_t block_stop = 0;
-  MINFO("source blockchain height: " <<  m_blockchain_storage->get_current_blockchain_height()-1);
+  oxen::log::info(logcat, "source blockchain height: {}", m_blockchain_storage->get_current_blockchain_height()-1);
   if ((requested_block_stop > 0) && (requested_block_stop < m_blockchain_storage->get_current_blockchain_height()))
   {
-    MINFO("Using requested block height: " << requested_block_stop);
+    oxen::log::info(logcat, "Using requested block height: {}", requested_block_stop);
     block_stop = requested_block_stop;
   }
   else
   {
     block_stop = m_blockchain_storage->get_current_blockchain_height() - 1;
-    MINFO("Using block height of source blockchain: " << block_stop);
+    oxen::log::info(logcat, "Using block height of source blockchain: {}", block_stop);
   }
-  MINFO("Storing blocks raw data...");
+  oxen::log::info(logcat, "Storing blocks raw data...");
   if (!BlocksdatFile::open_writer(output_file, block_stop))
   {
-    MFATAL("failed to open raw file for write");
+    oxen::log::error(logcat, "failed to open raw file for write");
     return false;
   }
   for (m_cur_height = block_start; m_cur_height <= block_stop; ++m_cur_height)
@@ -167,7 +167,7 @@ bool BlocksdatFile::store_blockchain_raw(Blockchain* _blockchain_storage, tx_mem
   std::cout << refresh_string;
   std::cout << "block " << m_cur_height-1 << "/" << block_stop << "\n";
 
-  MINFO("Number of blocks exported: " << num_blocks_written);
+  oxen::log::info(logcat, "Number of blocks exported: {}", num_blocks_written);
 
   return BlocksdatFile::close();
 }
