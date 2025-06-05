@@ -1,6 +1,8 @@
 #include "core_rpc_server_command_parser.h"
 #include "rpc/common/param_parser.hpp"
-
+#include <oxenc/bt_serialize.h>
+#include <oxenc/base64.h>
+#include <oxenc/hex.h>
 
 namespace cryptonote::rpc {
   using nlohmann::json;

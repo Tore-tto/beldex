@@ -2,6 +2,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <mutex>
+#include <atomic>
 #include <shared_mutex>
 #include <string_view>
 

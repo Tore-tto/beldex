@@ -1169,7 +1169,7 @@ static bool validate_against_previous_mapping(bns::name_system_db &bns_db, uint6
     // If buying a new name then the existing name must not be active
     if (check_condition(mapping.active(blockchain_height), reason,
           "Cannot buy an BNS name that is already registered: name_hash={}; TX: {}; {}",
-          mapping.name_hash, mapping.type, tx, bns_extra_string(bns_db.network_type(), bns_extra)))
+          mapping.name_hash, tx, bns_extra_string(bns_db.network_type(), bns_extra)))
         return false;
     }
   else if (bns_extra.is_renewing())
@@ -1177,7 +1177,7 @@ static bool validate_against_previous_mapping(bns::name_system_db &bns_db, uint6
     // We allow anyone to renew a name, but it has to exist and be currently active
     if (check_condition(!mapping, reason, "{}, {} renewal requested but mapping does not exist.", tx, bns_extra_string(bns_db.network_type(), bns_extra)))
       return false;
-    if (check_condition(!mapping.active(blockchain_height), reason, "{}, {} TX requested to renew mapping that has already expired"), tx, bns_extra_string(bns_db.network_type(), bns_extra))
+    if (check_condition(!mapping.active(blockchain_height), reason, "{}, {} TX requested to renew mapping that has already expired", tx, bns_extra_string(bns_db.network_type(), bns_extra)))
       return false;
     expected_prev_txid = mapping.txid;
 
@@ -1190,11 +1190,11 @@ static bool validate_against_previous_mapping(bns::name_system_db &bns_db, uint6
         bns_extra.field_is_set(bns::extra_field::owner) ? &bns_extra.owner : nullptr,
         bns_extra.field_is_set(bns::extra_field::backup_owner) ? &bns_extra.backup_owner : nullptr,
         expected_prev_txid);
-    if (check_condition(data.empty(), reason, "{}, {} unexpectedly failed to generate signature, please inform the Beldex developers"), tx, bns_extra_string(bns_db.network_type(), bns_extra))
+    if (check_condition(data.empty(), reason, "{}, {} unexpectedly failed to generate signature, please inform the Beldex developers", tx, bns_extra_string(bns_db.network_type(), bns_extra)))
       return false;
 
   crypto::hash hash;
-    crypto_generichash(reinterpret_cast<unsigned char*>(hash.data), sizeof(hash), reinterpret_cast<const unsigned char*>(data.data()), data.size(), nullptr /*key*/, 0 /*key_len*/);
+    crypto_generichash(hash.data(), hash.size(), reinterpret_cast<const unsigned char*>(data.data()), data.size(), nullptr /*key*/, 0 /*key_len*/);
 
     if (check_condition(!verify_bns_signature(hash, bns_extra.signature, mapping.owner) &&
                         !verify_bns_signature(hash, bns_extra.signature, mapping.backup_owner), reason,
@@ -1283,7 +1283,7 @@ bool name_system_db::validate_bns_tx(hf hf_version, uint64_t blockchain_height, 
   // BNS Field(s) Validation
   // -----------------------------------------------------------------------------------------------
   {
-    if (check_condition((bns_extra.name_hash == null_name_hash || bns_extra.name_hash == crypto::null_hash), reason, "{}, {} specified the null name hash", tx, bns_extra_string(nettype, bns_extra)))
+    if (check_condition((bns_extra.name_hash == null_name_hash || !bns_extra.name_hash), reason, "{}, {} specified the null name hash", tx, bns_extra_string(nettype, bns_extra)))
         return false;
 
     if (bns_extra.field_is_set(bns::extra_field::encrypted_bchat_value))
@@ -1307,7 +1307,7 @@ bool name_system_db::validate_bns_tx(hf hf_version, uint64_t blockchain_height, 
     if (bns_extra.field_is_set(bns::extra_field::encrypted_eth_addr_value))
     {
       // BNS Allowed type Validation
-      if (check_condition(hf_version < cryptonote::hf::hf19_enhance_bns, reason, tx, ", ", bns_extra_string(nettype, bns_extra)," specifying eth_addr is disallowed in HF", +static_cast<uint8_t>(hf_version)))
+      if (check_condition(hf_version < cryptonote::hf::hf19_enhance_bns, reason, "{}: {} specifying eth_addr is disallowed in HF {}", tx, bns_extra_string(nettype, bns_extra)))
         return false;
 
       if (!mapping_value::validate_encrypted(mapping_type::eth_addr, bns_extra.encrypted_eth_addr_value, nullptr, reason))

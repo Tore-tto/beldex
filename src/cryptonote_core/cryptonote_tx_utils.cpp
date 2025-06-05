@@ -911,8 +911,8 @@ namespace cryptonote
       log::debug(globallogcat, "Null secret key, skipping signatures");
     }
 
-      if (tx.version == txversion::v1)
-      {
+    if (tx.version == txversion::v1)
+    {
           log::debug(globallogcat, "tx.version == txversion::v1");
           //generate ring signatures
           crypto::hash tx_prefix_hash;
@@ -937,18 +937,14 @@ namespace cryptonote
               tx.signatures.push_back(std::vector<crypto::signature>());
               std::vector<crypto::signature>& sigs = tx.signatures.back();
               sigs.resize(src_entr.outputs.size());
-              if (!zero_secret_key)
-                  crypto::generate_ring_signature(tx_prefix_hash, var::get<txin_to_key>(tx.vin[i]).k_image, keys_ptrs, in_contexts[i].in_ephemeral.sec, src_entr.real_output, sigs.data());
               ss_ring_s << "signatures:\n";
-              std::for_each(sigs.begin(), sigs.end(), [&](const crypto::signature& s){ss_ring_s << s << "\n";});
-              ss_ring_s << "prefix_hash:" << tx_prefix_hash << "\nin_ephemeral_key: " << in_contexts[i].in_ephemeral.sec << "\nreal_output: " << src_entr.real_output << "\n";
+              std::for_each(sigs.begin(), sigs.end(), [&](const crypto::signature& s){ss_ring_s << tools::type_to_hex(s) << "\n";});
               i++;
           }
 
           log::info(log::Cat("construct_tx"), "transaction_created: {}\n{}\n{}", get_transaction_hash(tx), obj_to_json_str(tx), ss_ring_s.str());
-    }
-    else
-    {
+      } 
+      else {
 
         size_t n_total_outs = sources[0].outputs.size(); // only for non-simple rct
 

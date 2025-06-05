@@ -1250,9 +1250,10 @@ namespace master_nodes
       fmt::format_to(append, " (none)");
     for (const auto& sig : block.signatures)
     {
-      fmt::format_to(append, "\n [{:d}] validator: {}", sig.voter_index,
-        !quorum ? "(invalid quorum)" : (sig.voter_index >= quorum->validators.size()) ? "(invalid quorum index)" :
-        "{}: {}"_format(quorum->validators[sig.voter_index], sig.signature));//oxenc::to_hex(tools::view_guts(quorum->validators[sig.voter_index]), oxenc::to_hex(tools::view_guts(sig.signature))
+      fmt::format_to(append, "\n  [{:d}] validator: {}", sig.voter_index,
+          !quorum ? "(invalid quorum)" :
+          sig.voter_index >= quorum->validators.size() ? "(invalid quorum index)" :
+          "{}: {}"_format(quorum->validators[sig.voter_index], sig.signature));//oxenc::to_hex(tools::view_guts(quorum->validators[sig.voter_index]), oxenc::to_hex(tools::view_guts(sig.signature))
     }
     return s;
   }
@@ -1620,7 +1621,7 @@ namespace master_nodes
     else
     {
       uint64_t seed = 0;
-      std::memcpy(&seed, hash.data, sizeof(seed));
+      std::memcpy(&seed, hash.data(), sizeof(seed));
       oxenc::little_to_host_inplace(seed);
       seed += static_cast<uint64_t>(type);
       result.seed(seed);
@@ -3049,7 +3050,7 @@ namespace master_nodes
       return false;
     }
 
-    if (0 != crypto_sign_verify_detached(proof->sig_ed25519.data, reinterpret_cast<unsigned char *>(hash.data), sizeof(hash.data), proof->pubkey_ed25519.data))
+    if (0 != crypto_sign_verify_detached(proof->sig_ed25519.data(), hash.data(), hash.size(), proof->pubkey_ed25519.data()))
     {
       log::debug(logcat, "Rejecting uptime proof from {}: ed25519 signature validation failed", proof->pubkey);
       return false;

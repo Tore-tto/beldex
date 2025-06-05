@@ -60,7 +60,6 @@
 #include "cryptonote_core/master_node_voting.h"
 #include "cryptonote_core/master_node_list.h"
 #include "common/varint.h"
-#include "common/perf_timer.h"
 #include "common/meta.h"
 #include "common/hex.h"
 #include "checkpoints/checkpoints.h"
@@ -2205,7 +2204,7 @@ namespace cryptonote::rpc {
       std::vector<crypto::public_key> master_node_pubkeys;
       bool active_only = false;
       int limit = 0;
-      crypto::hash poll_block_hash = crypto::hash::null();
+      crypto::hash poll_block_hash{};
     } request;
 
   };

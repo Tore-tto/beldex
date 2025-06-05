@@ -55,6 +55,7 @@ target_link_libraries(rpc_commands
     cpr::cpr
   PRIVATE
     cryptonote_protocol
+    logging
     extra)
 
 target_link_libraries(rpc
@@ -68,6 +69,7 @@ target_link_libraries(rpc
     cryptonote_protocol
     Boost::thread
     Boost::program_options
+    logging
     extra)
 
 target_link_libraries(daemon_rpc_server
@@ -83,4 +85,5 @@ target_link_libraries(rpc_http_client
     common
     cpr::cpr
   PRIVATE
+    logging
     extra)

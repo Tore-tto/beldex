@@ -9,6 +9,7 @@ namespace cryptonote::rpc {
 
 using nlohmann::json;
 using beldex::json_to_bt;
+using namespace std::literals;
 
 using rpc_input = std::variant<std::monostate, nlohmann::json, oxenc::bt_dict_consumer>;
 

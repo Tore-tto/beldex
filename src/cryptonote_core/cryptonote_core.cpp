@@ -1038,7 +1038,7 @@ namespace cryptonote
         m_master_node,
         [this](std::string_view x25519_pk) { return m_master_node_list.remote_lookup(x25519_pk); },
         [](LogLevel omqlevel, const char *file, int line, std::string msg) {
-          auto level = *oxen::logging::parse_level(omqlevel);
+          auto level = *beldex::logging::parse_level(omqlevel);
           if(omqlogcat->should_log(level))
             omqlogcat->log({file, line, "omq"}, level, "{}", msg);
         },

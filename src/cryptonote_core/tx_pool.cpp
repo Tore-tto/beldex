@@ -240,7 +240,6 @@ namespace cryptonote
     // this should already be called with that lock, but let's make it explicit for clarity
     std::unique_lock lock{m_transactions_lock};
 
-    PERF_TIMER(add_tx);
     if (tx.version == txversion::v0)
     {
       // v0 never accepted

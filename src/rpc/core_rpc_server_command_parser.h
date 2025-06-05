@@ -2,7 +2,7 @@
 
 #include "core_rpc_server_commands_defs.h"
 #include <nlohmann/json.hpp>
-#include <oxenc/bt_serialize.h>
+#include <oxenc/bt_value.h>
 
 namespace cryptonote::rpc {
 

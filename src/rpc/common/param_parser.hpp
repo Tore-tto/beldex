@@ -1,11 +1,9 @@
 #pragma once
 
 #include "common/json_binary_proxy.h"
-
+// #include "rpc/common/rpc_binary.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
-#include <oxenc/base64.h>
-#include <oxenc/hex.h>
 #include <oxenc/bt_serialize.h>
 #include <type_traits>
 #include <utility>

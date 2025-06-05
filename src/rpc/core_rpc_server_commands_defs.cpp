@@ -1,6 +1,5 @@
 #include "core_rpc_server_commands_defs.h"
 #include <nlohmann/json.hpp>
-#include <oxenc/base64.h>
 
 namespace nlohmann {
 

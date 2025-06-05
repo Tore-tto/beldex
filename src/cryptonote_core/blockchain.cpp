@@ -62,7 +62,6 @@
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
 #include "ringct/rctSigs.h"
-#include "common/perf_timer.h"
 #include "master_node_voting.h"
 #include "master_node_list.h"
 #include "common/varint.h"
@@ -2867,7 +2866,7 @@ bool Blockchain::add_block_as_invalid(cryptonote::block const &block)
   std::unique_lock lock{*this};
   auto i_res = m_invalid_blocks.insert(get_block_hash(block));
   CHECK_AND_ASSERT_MES(i_res.second, false, "at insertion invalid block returned status failed");
-  MINFO("BLOCK ADDED AS INVALID: " << (*i_res.first) << std::endl << ", prev_id=" << block.prev_id << ", m_invalid_blocks count=" << m_invalid_blocks.size());
+  log::info(logcat, "BLOCK ADDED AS INVALID: {}\n, prev_id={}, m_invalid_blocks count={}", (*i_res.first), block.prev_id, m_invalid_blocks.size());
   return true;
 }
 
@@ -4099,7 +4098,7 @@ Blockchain::block_pow_verified Blockchain::verify_block_pow(cryptonote::block co
     }
   }
 
-  crypto::hash proof_of_work = null_hash;
+  crypto::hash proof_of_work{};
 
   if (result.per_block_checkpointed)
   {
@@ -4147,7 +4146,7 @@ bool Blockchain::basic_block_checks(cryptonote::block const &blk, bool alt_block
   }
   else
   {
-    crypto::hash melHash = crypto::null_hash;
+    crypto::hash melHash{};
     tools::hex_to_type("b1b16f552bd17f246dce78d05df6794496281a9f4935dc44eec74bbfb18a90b9", melHash);
     if(blk_hash == melHash)
     {
@@ -4176,7 +4175,7 @@ bool Blockchain::basic_block_checks(cryptonote::block const &blk, bool alt_block
           "known one. This may be an old version of the daemon, and a software",
           "update may be required to sync further. Try running: update check",
           "**********************************************************************"})
-          log::warning(logcat, fg(fmt::terminal_color::red), msg);but 
+          log::warning(logcat, fg(fmt::terminal_color::red), msg);
       }
     }
 

@@ -10,5 +10,6 @@ target_link_libraries(rpc_common
     common
     uWebSockets
     oxenmq::oxenmq
+    logging
   PRIVATE
     extra)
