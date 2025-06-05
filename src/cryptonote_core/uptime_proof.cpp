@@ -83,7 +83,7 @@ Proof::Proof(const std::string& serialized_proof)
       belnet_version[k++] = static_cast<uint16_t>(get_int<unsigned>(i));
     }
   } catch (const std::exception& e) {
-    log::warning(logcat, "deserialization failed: {}", e.what());
+    oxen::log::warning(logcat, "deserialization failed: {}", e.what());
     throw;
   }
 }

@@ -280,7 +280,7 @@ namespace master_nodes
         {
           auto mask  = std::bitset<sizeof(POS_validator_bit_mask()) * 8>(POS_validator_bit_mask());
           auto other = std::bitset<sizeof(POS_validator_bit_mask()) * 8>(block->POS.validator_bitset);
-          log::info(logcat, "POS block specifies validator participation bits out of bounds. Expected the bit mask: {}, block: {}", mask, other);
+          log::info(logcat, "POS block specifies validator participation bits out of bounds. Expected the bit mask: {}, block: {}", tools::type_to_hex(mask), tools::type_to_hex(other));
           return false;
         }
       }

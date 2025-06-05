@@ -89,6 +89,7 @@ namespace tools
 
   bool on_startup()
   {
+    // mlog_configure("", true);
 
 #ifdef __GLIBC__
     const char *ver = ::gnu_get_libc_version();
