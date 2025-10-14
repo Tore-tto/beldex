@@ -845,17 +845,17 @@ bool command_parser_executor::check_blockchain_pruning(const std::vector<std::st
   return m_executor.check_blockchain_pruning();
 }
 
-// bool command_parser_executor::set_bootstrap_daemon(const std::vector<std::string>& args)
-// {
-//   const size_t args_count = args.size();
-//   if (args_count < 1 || args_count > 3)
-//     return false;
+bool command_parser_executor::set_bootstrap_daemon(const std::vector<std::string>& args)
+{
+  const size_t args_count = args.size();
+  if (args_count < 1 || args_count > 3)
+    return false;
 
-//   return m_executor.set_bootstrap_daemon(
-//     args[0] != "none" ? args[0] : std::string(),
-//     args_count > 1 ? args[1] : std::string(),
-//     args_count > 2 ? args[2] : std::string());
-// }
+  return m_executor.set_bootstrap_daemon(
+    args[0] != "none" ? args[0] : std::string(),
+    args_count > 1 ? args[1] : std::string(),
+    args_count > 2 ? args[2] : std::string());
+}
 
 bool command_parser_executor::flush_cache(const std::vector<std::string>& args)
 {

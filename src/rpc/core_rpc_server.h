@@ -56,9 +56,9 @@ namespace boost::program_options {
   class variables_map;
 }
 
-// namespace cryptonote {
-//   class bootstrap_daemon;
-// }
+namespace cryptonote {
+  class bootstrap_daemon;
+}
 
 namespace cryptonote::rpc {
   // FIXME: temporary shim for converting RPC methods
@@ -112,8 +112,8 @@ namespace cryptonote::rpc {
   class core_rpc_server
   {
   public:
-    // static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_address;
-    // static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_login;
+    static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_address;
+    static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_login;
 
     core_rpc_server(
         core& cr
@@ -121,7 +121,7 @@ namespace cryptonote::rpc {
       );
 
     static void init_options(boost::program_options::options_description& desc, boost::program_options::options_description& hidden);
-    // void init(const boost::program_options::variables_map& vm);
+    void init(const boost::program_options::variables_map& vm);
 
     /// Returns a reference to the owning cryptonote core object
     core& get_core() { return m_core; }
@@ -196,6 +196,7 @@ namespace cryptonote::rpc {
     void invoke(BNS_RESOLVE& resolve, rpc_context context);
     void invoke(BNS_LOOKUP& lookup, rpc_context context);
     void invoke(BNS_VALUE_DECRYPT& value_decrypt, rpc_context context);
+    void invoke(SET_BOOTSTRAP_DAEMON& bootstrap_daemon, rpc_context context);
 
 
 
@@ -209,10 +210,6 @@ namespace cryptonote::rpc {
     GET_OUTPUTS_BIN::response                   invoke(GET_OUTPUTS_BIN::request&& req, rpc_context context);
     GET_TRANSACTION_POOL_HASHES_BIN::response   invoke(GET_TRANSACTION_POOL_HASHES_BIN::request&& req, rpc_context context);
     GET_TX_GLOBAL_OUTPUTS_INDEXES_BIN::response invoke(GET_TX_GLOBAL_OUTPUTS_INDEXES_BIN::request&& req, rpc_context context);
-
-    // FIXME: unconverted JSON RPC endpoints:
-    // SET_BOOTSTRAP_DAEMON::response                      invoke(SET_BOOTSTRAP_DAEMON::request&& req, rpc_context context);
-
 #if defined(BELDEX_ENABLE_INTEGRATION_TEST_HOOKS)
     void on_relay_uptime_and_votes()
     {
@@ -263,21 +260,21 @@ private:
 
     //utils
     uint64_t get_block_reward(const block& blk);
-    // bool set_bootstrap_daemon(const std::string &address, std::string_view username_password);
-    // bool set_bootstrap_daemon(const std::string &address, std::string_view username, std::string_view password);
+    bool set_bootstrap_daemon(const std::string &address, std::string_view username_password);
+    bool set_bootstrap_daemon(const std::string &address, std::string_view username, std::string_view password);
     void fill_block_header_response(const block& blk, bool orphan_status, uint64_t height, const crypto::hash& hash, block_header_response& response, bool fill_pow_hash, bool get_tx_hashes);
-    // std::unique_lock<std::shared_mutex> should_bootstrap_lock();
+    std::unique_lock<std::shared_mutex> should_bootstrap_lock();
 
-    // template <typename COMMAND_TYPE>
-    // bool use_bootstrap_daemon_if_necessary(const typename COMMAND_TYPE::request& req, typename COMMAND_TYPE::response& res);
+    template <typename COMMAND_TYPE>
+    bool use_bootstrap_daemon_if_necessary(const typename COMMAND_TYPE::request& req, typename COMMAND_TYPE::response& res);
     
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
-    // std::shared_mutex m_bootstrap_daemon_mutex;
-    // std::atomic<bool> m_should_use_bootstrap_daemon;
-    // std::unique_ptr<bootstrap_daemon> m_bootstrap_daemon;
-    // std::chrono::system_clock::time_point m_bootstrap_height_check_time;
-    // bool m_was_bootstrap_ever_used;
+    std::shared_mutex m_bootstrap_daemon_mutex;
+    std::atomic<bool> m_should_use_bootstrap_daemon;
+    std::unique_ptr<bootstrap_daemon> m_bootstrap_daemon;
+    std::chrono::system_clock::time_point m_bootstrap_height_check_time;
+    bool m_was_bootstrap_ever_used;
   };
 
 } // namespace cryptonote::rpc

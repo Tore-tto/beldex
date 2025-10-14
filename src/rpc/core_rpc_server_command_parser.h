@@ -52,6 +52,7 @@ namespace cryptonote::rpc {
   void parse_request(SET_LIMIT& limit, rpc_input in);
   void parse_request(SET_LOG_CATEGORIES& set_log_categories, rpc_input in);
   void parse_request(SET_LOG_LEVEL& set_log_level, rpc_input in);
+  void parse_request(SET_BOOTSTRAP_DAEMON& bootstrap_daemon, rpc_input in);
   void parse_request(START_MINING& start_mining, rpc_input in);
   void parse_request(STORAGE_SERVER_PING& storage_server_ping, rpc_input in);
   void parse_request(SUBMIT_TRANSACTION& tx, rpc_input in);

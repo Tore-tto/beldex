@@ -41,7 +41,7 @@
 #include <oxenc/endian.h>
 #include "epee/net/network_throttle.hpp"
 #include "common/string_util.h"
-// #include "bootstrap_daemon.h"
+#include "bootstrap_daemon.h"
 #include "crypto/crypto.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_basic/tx_extra.h"
@@ -150,7 +150,7 @@ namespace cryptonote::rpc {
 
   const std::unordered_map<std::string, std::shared_ptr<const rpc_command>> rpc_commands = register_rpc_commands(rpc::core_rpc_types{}, rpc::core_rpc_binary_types{});
 
-  /*const command_line::arg_descriptor<std::string> core_rpc_server::arg_bootstrap_daemon_address = {
+  const command_line::arg_descriptor<std::string> core_rpc_server::arg_bootstrap_daemon_address = {
       "bootstrap-daemon-address"
     , "URL of a 'bootstrap' remote daemon that the connected wallets can use while this daemon is still not fully synced."
     , ""
@@ -160,14 +160,14 @@ namespace cryptonote::rpc {
       "bootstrap-daemon-login"
     , "Specify username:password for the bootstrap daemon login"
     , ""
-    };*/
+    };
 
 
   //-----------------------------------------------------------------------------------
   void core_rpc_server::init_options(boost::program_options::options_description& desc, boost::program_options::options_description& hidden)
   {
-    // command_line::add_arg(desc, arg_bootstrap_daemon_address);
-    // command_line::add_arg(desc, arg_bootstrap_daemon_login);
+    command_line::add_arg(desc, arg_bootstrap_daemon_address);
+    command_line::add_arg(desc, arg_bootstrap_daemon_login);
     cryptonote::rpc_args::init_options(desc, hidden);
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -177,48 +177,47 @@ namespace cryptonote::rpc {
     )
     : m_core(cr)
     , m_p2p(p2p)
-  //   , m_should_use_bootstrap_daemon(false)
-  //   , m_was_bootstrap_ever_used(false)
-  // {}
-  // bool core_rpc_server::set_bootstrap_daemon(const std::string &address, std::string_view username_password)
-  // {
-  //   std::string_view username, password;
-  //   if (auto loc = username_password.find(':'); loc != std::string::npos)
-  //   {
-  //     username = username_password.substr(0, loc);
-  //     password = username_password.substr(loc + 1);
-  //   }
-  //   return set_bootstrap_daemon(address, username, password);
-  // }
-  // //------------------------------------------------------------------------------------------------------------------------------
-  // bool core_rpc_server::set_bootstrap_daemon(const std::string &address, std::string_view username, std::string_view password)
-  // {
-  //   std::optional<std::pair<std::string_view, std::string_view>> credentials;
-  //   if (!username.empty() || !password.empty())
-  //     credentials.emplace(username, password);
-
-  //   std::unique_lock lock{m_bootstrap_daemon_mutex};
-
-  //   if (address.empty())
-  //     m_bootstrap_daemon.reset();
-  //   else
-  //     m_bootstrap_daemon = std::make_unique<bootstrap_daemon>(address, credentials);
-
-  //   m_should_use_bootstrap_daemon = (bool) m_bootstrap_daemon;
-
-  //   return true;
-  // }
-  // //------------------------------------------------------------------------------------------------------------------------------
-  // void core_rpc_server::init(const boost::program_options::variables_map& vm)
-  // {
-  //   if (!set_bootstrap_daemon(command_line::get_arg(vm, arg_bootstrap_daemon_address),
-  //                             command_line::get_arg(vm, arg_bootstrap_daemon_login)))
-  //   {
-  //     MERROR("Failed to parse bootstrap daemon address");
-  //   }
-  //   m_was_bootstrap_ever_used = false;
-  // }
+    , m_should_use_bootstrap_daemon(false)
+    , m_was_bootstrap_ever_used(false)
   {}
+  bool core_rpc_server::set_bootstrap_daemon(const std::string &address, std::string_view username_password)
+  {
+    std::string_view username, password;
+    if (auto loc = username_password.find(':'); loc != std::string::npos)
+    {
+      username = username_password.substr(0, loc);
+      password = username_password.substr(loc + 1);
+    }
+    return set_bootstrap_daemon(address, username, password);
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::set_bootstrap_daemon(const std::string &address, std::string_view username, std::string_view password)
+  {
+    std::optional<std::pair<std::string_view, std::string_view>> credentials;
+    if (!username.empty() || !password.empty())
+      credentials.emplace(username, password);
+
+    std::unique_lock lock{m_bootstrap_daemon_mutex};
+
+    if (address.empty())
+      m_bootstrap_daemon.reset();
+    else
+      m_bootstrap_daemon = std::make_unique<bootstrap_daemon>(address, credentials);
+
+    m_should_use_bootstrap_daemon = (bool) m_bootstrap_daemon;
+
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  void core_rpc_server::init(const boost::program_options::variables_map& vm)
+  {
+    if (!set_bootstrap_daemon(command_line::get_arg(vm, arg_bootstrap_daemon_address),
+                              command_line::get_arg(vm, arg_bootstrap_daemon_login)))
+    {
+      MERROR("Failed to parse bootstrap daemon address");
+    }
+    m_was_bootstrap_ever_used = false;
+  }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::check_core_ready()
   {
@@ -254,25 +253,21 @@ namespace cryptonote::rpc {
   void core_rpc_server::invoke(GET_INFO& info, rpc_context context)
   {
     PERF_TIMER(on_get_info);
-    /* FIXME
-    if (use_bootstrap_daemon_if_necessary<GET_INFO>(req, res))
-    {
-      if (context.admin)
-      {
-        auto [height, top_hash] = m_core.get_blockchain_top();
-        res.height_without_bootstrap = height;
-        ++*res.height_without_bootstrap; // turn top block height into blockchain height
-        res.was_bootstrap_ever_used = true;
+    // if (use_bootstrap_daemon_if_necessary<GET_INFO>(req,info.response))
+    // {
+    //     if (context.admin)
+    //     {
+    //         auto [height, top_hash] = m_core.get_blockchain_top();
+    //         info.response["height_without_bootstrap"] = height + 1;
+    //         info.response["was_bootstrap_ever_used"] = true;
+        
+    //         std::shared_lock lock{m_bootstrap_daemon_mutex};
+    //         if (m_bootstrap_daemon)
+    //             info.response["bootstrap_daemon_address"] = m_bootstrap_daemon->address();
+    //     }
+    //     return;
+    // }
 
-        std::shared_lock lock{m_bootstrap_daemon_mutex};
-        if (m_bootstrap_daemon.get() != nullptr)
-        {
-          res.bootstrap_daemon_address = m_bootstrap_daemon->address();
-        }
-      }
-      return res;
-    }
-    */
     auto [top_height, top_hash] = m_core.get_blockchain_top();
  
     auto& bs = m_core.get_blockchain_storage();
@@ -356,11 +351,11 @@ namespace cryptonote::rpc {
       }
       info.response["free_space"] = m_core.get_free_space();
 
-      // if (std::shared_lock lock{m_bootstrap_daemon_mutex}; m_bootstrap_daemon) {
-      //   info.response["bootstrap_daemon_address"] = m_bootstrap_daemon->address();
-      //   info.response["height_without_bootstrap"] = height;
-      //   info.response["was_bootstrap_ever_used"] = m_was_bootstrap_ever_used;
-      // }
+      if (std::shared_lock lock{m_bootstrap_daemon_mutex}; m_bootstrap_daemon) {
+        info.response["bootstrap_daemon_address"] = m_bootstrap_daemon->address();
+        info.response["height_without_bootstrap"] = height;
+        info.response["was_bootstrap_ever_used"] = m_was_bootstrap_ever_used;
+      }
     }
 
     if (m_core.offline())
@@ -1456,6 +1451,23 @@ namespace cryptonote::rpc {
   //   return res;
   // }
   //------------------------------------------------------------------------------------------------------------------------------
+  void core_rpc_server::invoke(SET_BOOTSTRAP_DAEMON& bootstrap_daemon, rpc_context context){
+    PERF_TIMER(on_set_bootstrap_daemon);
+    const auto& req = bootstrap_daemon.request;
+
+    if (!set_bootstrap_daemon(req.address, req.username, req.password))
+    {
+        // If setting failed, throw an RPC error
+        throw rpc_error{ERROR_WRONG_PARAM,
+            "Failed to set bootstrap daemon to address = " + req.address};
+    }
+
+    // On success, populate the response
+    bootstrap_daemon.response["status"] = STATUS_OK;
+    bootstrap_daemon.response["address"] = req.address.empty() ? "none" : req.address;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+
   void core_rpc_server::invoke(STOP_DAEMON& stop_daemon, rpc_context context)
   {
     PERF_TIMER(on_stop_daemon);

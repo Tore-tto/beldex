@@ -288,7 +288,7 @@ namespace cryptonote::rpc {
     {
       std::string status;                      // General RPC error code. "OK" means everything looks good.
       std::vector<distribution> distributions; //
-      // bool untrusted;                          // States if the result is obtained using the bootstrap mode, and is therefore not trusted (`true`), or when the daemon is fully synced (`false`).
+      bool untrusted;                          // States if the result is obtained using the bootstrap mode, and is therefore not trusted (`true`), or when the daemon is fully synced (`false`).
 
       KV_MAP_SERIALIZABLE
     };
