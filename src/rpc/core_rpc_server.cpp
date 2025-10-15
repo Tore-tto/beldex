@@ -253,20 +253,20 @@ namespace cryptonote::rpc {
   void core_rpc_server::invoke(GET_INFO& info, rpc_context context)
   {
     PERF_TIMER(on_get_info);
-    // if (use_bootstrap_daemon_if_necessary<GET_INFO>(req,info.response))
-    // {
-    //     if (context.admin)
-    //     {
-    //         auto [height, top_hash] = m_core.get_blockchain_top();
-    //         info.response["height_without_bootstrap"] = height + 1;
-    //         info.response["was_bootstrap_ever_used"] = true;
-        
-    //         std::shared_lock lock{m_bootstrap_daemon_mutex};
-    //         if (m_bootstrap_daemon)
-    //             info.response["bootstrap_daemon_address"] = m_bootstrap_daemon->address();
-    //     }
-    //     return;
-    // }
+    if (use_bootstrap_daemon_if_necessary<GET_INFO>({}, info.response))
+    {
+        if (context.admin)
+        {
+            auto [height, top_hash] = m_core.get_blockchain_top();
+            info.response["height_without_bootstrap"] = height + 1;
+            info.response["was_bootstrap_ever_used"] = true;
+
+            std::shared_lock lock{m_bootstrap_daemon_mutex};
+            if (m_bootstrap_daemon)
+                info.response["bootstrap_daemon_address"] = m_bootstrap_daemon->address();
+        }
+        return;
+    }
 
     auto [top_height, top_hash] = m_core.get_blockchain_top();
  
@@ -1599,7 +1599,7 @@ namespace cryptonote::rpc {
 
   /// All the common (untemplated) code for use_bootstrap_daemon_if_necessary.  Returns a held lock
   /// if we need to bootstrap, an unheld one if we don't.
-  /*std::unique_lock<std::shared_mutex> core_rpc_server::should_bootstrap_lock()
+  std::unique_lock<std::shared_mutex> core_rpc_server::should_bootstrap_lock()
   {
     // TODO - support bootstrapping via a remote LMQ RPC; requires some argument fiddling
 
@@ -1658,22 +1658,23 @@ namespace cryptonote::rpc {
   // The RPC type must have a `bool untrusted` member.
   //
   template <typename RPC>
-  bool core_rpc_server::use_bootstrap_daemon_if_necessary(const typename RPC::request& req, typename RPC::response& res)
+  bool core_rpc_server::use_bootstrap_daemon_if_necessary(const nlohmann::json& req, nlohmann::json& res)
   {
-    res.untrusted = false; // If compilation fails here then the type being instantiated doesn't support using a bootstrap daemon
-    auto bs_lock = should_bootstrap_lock();
-    if (!bs_lock)
-      return false;
+      res["untrusted"] = false;
 
-    std::string command_name{RPC::names().front()};
+      auto bs_lock = should_bootstrap_lock();
+      if (!bs_lock)
+          return false;  // No bootstrap daemon available
 
-    if (!m_bootstrap_daemon->invoke<RPC>(req, res))
-      throw std::runtime_error{"Bootstrap request failed"};
+      std::string command_name{RPC::names().front()};
 
-    m_was_bootstrap_ever_used = true;
-    res.untrusted = true;
-    return true;
-  }*/
+      if (!m_bootstrap_daemon->invoke_json(command_name, req, res))
+          throw std::runtime_error{"Bootstrap request failed"};
+
+      m_was_bootstrap_ever_used = true;
+      res["untrusted"] = true;
+      return true;
+  }
   //------------------------------------------------------------------------------------------------------------------------------
   void core_rpc_server::invoke(GET_LAST_BLOCK_HEADER& get_last_block_header, rpc_context context)
   {

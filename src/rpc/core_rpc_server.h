@@ -265,8 +265,9 @@ private:
     void fill_block_header_response(const block& blk, bool orphan_status, uint64_t height, const crypto::hash& hash, block_header_response& response, bool fill_pow_hash, bool get_tx_hashes);
     std::unique_lock<std::shared_mutex> should_bootstrap_lock();
 
+    // JSON version (new)
     template <typename COMMAND_TYPE>
-    bool use_bootstrap_daemon_if_necessary(const typename COMMAND_TYPE::request& req, typename COMMAND_TYPE::response& res);
+    bool use_bootstrap_daemon_if_necessary(const nlohmann::json& req, nlohmann::json& res);    
     
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;

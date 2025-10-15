@@ -6,6 +6,10 @@
 #include "crypto/crypto.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "epee/misc_log_ex.h"
+#include <nlohmann/json.hpp> 
+#include "rpc/core_rpc_server_commands_defs.h"
+#include "rpc/http_client.h"
+
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "daemon.rpc.bootstrap_daemon"
@@ -13,6 +17,25 @@
 namespace cryptonote
 {
 
+
+  bool bootstrap_daemon::invoke_json(std::string_view method, const nlohmann::json& req, nlohmann::json& res)
+  {
+      if (!switch_server_if_needed())
+          return false;
+
+      try {
+          // Use your existing json_rpc() function
+          res = m_http_client.json_rpc(method, req);
+      }
+      catch (const std::exception& e) {
+          MWARNING("bootstrap daemon JSON request failed: " << e.what());
+          set_failed();
+          return false;
+      }
+
+      return true;
+  }
+  
   bootstrap_daemon::bootstrap_daemon(std::function<std::optional<std::string>()> get_next_public_node)
     : m_get_next_public_node(get_next_public_node)
   {
