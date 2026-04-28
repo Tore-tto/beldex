@@ -1294,6 +1294,27 @@ namespace cryptonote
           }
           rvv.push_back(&rv); // delayed batch verification
           break;
+        case rct::RCTType::ConfidentialAssets:
+          // Confidential-asset transactions run their own semantic check (structural
+          // sizes + BP+ range proofs over E_prime[]) and are not batched with
+          // standard BulletproofPlus because they use generator U instead of H.
+          if (!is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+          {
+            MERROR_VER("CA transaction: bulletproof_plus does not have canonical form");
+            set_semantics_failed(tx_info[n].tx_hash);
+            tx_info[n].tvc.m_verifivation_failed = true;
+            tx_info[n].result = false;
+            break;
+          }
+          if (!rct::verRctSemanticsCA(rv))
+          {
+            MERROR_VER("CA rct signature semantics check failed");
+            set_semantics_failed(tx_info[n].tx_hash);
+            tx_info[n].tvc.m_verifivation_failed = true;
+            tx_info[n].result = false;
+            break;
+          }
+          break;
         default:
           MERROR_VER("Unknown rct type: " << (int)rv.type);
           set_semantics_failed(tx_info[n].tx_hash);
