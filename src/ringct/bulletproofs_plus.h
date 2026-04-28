@@ -44,6 +44,12 @@ bool bulletproof_plus_VERIFY(const BulletproofPlus &proof);
 bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs);
 bool bulletproof_plus_VERIFY(const std::vector<BulletproofPlus> &proofs);
 
+// Confidential-asset variant: uses 'h' (typically ca::get_U()) as the value
+// generator instead of rct::H.  Commitments are E'_j = e_j*h + y'_j*G.
+bool bulletproof_plus_VERIFY_CA(const BulletproofPlus &proof, const rct::key &h);
+bool bulletproof_plus_VERIFY_CA(const std::vector<const BulletproofPlus*> &proofs, const rct::key &h);
+bool bulletproof_plus_VERIFY_CA(const std::vector<BulletproofPlus> &proofs, const rct::key &h);
+
 }
 
 #endif
