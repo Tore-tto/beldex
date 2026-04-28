@@ -83,6 +83,7 @@ add_executable(unit_tests
   uri.cpp
   varint.cpp
   ringct.cpp
+  ca_primitives.cpp
   output_selection.cpp
   vercmp.cpp
   ringdb.cpp
