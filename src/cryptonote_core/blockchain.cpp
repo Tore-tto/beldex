@@ -760,6 +760,7 @@ block Blockchain::pop_block_from_blockchain()
   }
 
   m_bns_db.block_detach(*this, m_db->height());
+  rollback_ca_block_txs(popped_txs);
 
   // return transactions from popped block to the tx_pool
   size_t pruned = 0;
@@ -3958,6 +3959,134 @@ void Blockchain::check_ring_signature(const crypto::hash &tx_prefix_hash, const 
 }
 
 //------------------------------------------------------------------
+bool Blockchain::apply_ca_block_txs(const std::vector<transaction>& txs)
+{
+  for (const auto& tx : txs)
+  {
+    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets)
+      continue;
+
+    tx_extra_asset_registration op;
+    if (!get_field_from_tx_extra(tx.extra, op))
+      continue;  // validated earlier; skip silently here
+
+    try
+    {
+      switch (op.op_type)
+      {
+        case asset_operation_type::REGISTER:
+          m_db->add_asset_descriptor(op.asset_id, op.descriptor);
+          break;
+
+        case asset_operation_type::EMIT:
+        {
+          asset_descriptor_base desc;
+          m_db->get_asset_descriptor(op.asset_id, desc);
+          desc.current_supply += op.amount;
+          m_db->update_asset_descriptor(op.asset_id, desc);
+          break;
+        }
+
+        case asset_operation_type::BURN:
+        {
+          asset_descriptor_base desc;
+          m_db->get_asset_descriptor(op.asset_id, desc);
+          desc.current_supply -= op.amount;
+          m_db->update_asset_descriptor(op.asset_id, desc);
+          break;
+        }
+
+        case asset_operation_type::UPDATE:
+        {
+          asset_descriptor_base desc;
+          m_db->get_asset_descriptor(op.asset_id, desc);
+          if (!op.descriptor.ticker.empty())    desc.ticker    = op.descriptor.ticker;
+          if (!op.descriptor.full_name.empty()) desc.full_name = op.descriptor.full_name;
+          if (!op.descriptor.meta_info.empty()) desc.meta_info = op.descriptor.meta_info;
+          if (op.descriptor.owner != crypto::null_pkey) desc.owner = op.descriptor.owner;
+          m_db->update_asset_descriptor(op.asset_id, desc);
+          break;
+        }
+
+        default:
+          MERROR("apply_ca_block_txs: unexpected op_type " << (int)op.op_type);
+          return false;
+      }
+    }
+    catch (const std::exception& e)
+    {
+      MERROR("apply_ca_block_txs: DB error: " << e.what());
+      return false;
+    }
+  }
+  return true;
+}
+
+//------------------------------------------------------------------
+void Blockchain::rollback_ca_block_txs(const std::vector<transaction>& txs)
+{
+  // Process in reverse so that if multiple ops touch the same asset within
+  // one block they are undone in the correct order.
+  for (auto it = txs.rbegin(); it != txs.rend(); ++it)
+  {
+    const auto& tx = *it;
+    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets)
+      continue;
+
+    tx_extra_asset_registration op;
+    if (!get_field_from_tx_extra(tx.extra, op))
+      continue;
+
+    try
+    {
+      switch (op.op_type)
+      {
+        case asset_operation_type::REGISTER:
+          m_db->remove_asset_descriptor(op.asset_id);
+          break;
+
+        case asset_operation_type::EMIT:
+        {
+          asset_descriptor_base desc;
+          if (m_db->get_asset_descriptor(op.asset_id, desc))
+          {
+            desc.current_supply -= op.amount;
+            m_db->update_asset_descriptor(op.asset_id, desc);
+          }
+          break;
+        }
+
+        case asset_operation_type::BURN:
+        {
+          asset_descriptor_base desc;
+          if (m_db->get_asset_descriptor(op.asset_id, desc))
+          {
+            desc.current_supply += op.amount;
+            m_db->update_asset_descriptor(op.asset_id, desc);
+          }
+          break;
+        }
+
+        case asset_operation_type::UPDATE:
+          // UPDATE rollback requires the previous mutable-field values; for now
+          // we log a warning. Full undo-log support can be added in a later phase.
+          MWARNING("rollback_ca_block_txs: UPDATE rollback not yet implemented for asset "
+                   << tools::type_to_hex(op.asset_id));
+          break;
+
+        default:
+          MERROR("rollback_ca_block_txs: unexpected op_type " << (int)op.op_type);
+          break;
+      }
+    }
+    catch (const std::exception& e)
+    {
+      MERROR("rollback_ca_block_txs: DB error: " << e.what());
+    }
+  }
+}
+
+//------------------------------------------------------------------
 uint64_t Blockchain::get_fee_quantization_mask()
 {
   static uint64_t mask = 0;
@@ -4749,6 +4878,13 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
   if (!m_bns_db.add_block(bl, only_txs))
   {
     MGINFO_RED("Failed to add block to BNS DB.");
+    bvc.m_verifivation_failed = true;
+    return false;
+  }
+
+  if (!apply_ca_block_txs(only_txs))
+  {
+    MGINFO_RED("Failed to apply Confidential Asset registry changes.");
     bvc.m_verifivation_failed = true;
     return false;
   }

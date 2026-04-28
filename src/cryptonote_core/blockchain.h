@@ -1399,6 +1399,14 @@ namespace cryptonote
      */
     bool add_block_as_invalid(const cryptonote::block &block);
 
+    // Apply Confidential Asset registry changes for all CA transactions in a block.
+    // Called during block commit; returns false on failure.
+    bool apply_ca_block_txs(const std::vector<transaction>& txs);
+
+    // Undo Confidential Asset registry changes for all CA transactions in a block.
+    // Called during block pop (chain reorg).
+    void rollback_ca_block_txs(const std::vector<transaction>& txs);
+
     /**
      * @brief checks a block's timestamp
      *
