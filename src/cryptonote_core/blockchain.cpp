@@ -91,6 +91,22 @@ using namespace crypto;
 
 using namespace cryptonote;
 
+// Produce the hash that an asset owner must sign for EMIT, BURN, or UPDATE
+// operations: cn_fast_hash(op_type_byte || asset_id[32] || le64(amount)).
+static crypto::hash make_asset_sig_message(cryptonote::asset_operation_type op_type,
+                                           const crypto::hash& asset_id,
+                                           uint64_t amount)
+{
+  std::array<uint8_t, 1 + 32 + 8> buf;
+  buf[0] = static_cast<uint8_t>(op_type);
+  std::memcpy(buf.data() + 1, asset_id.data, 32);
+  const uint64_t le_amount = SWAP64LE(amount);
+  std::memcpy(buf.data() + 33, &le_amount, 8);
+  crypto::hash h;
+  crypto::cn_fast_hash(buf.data(), buf.size(), h);
+  return h;
+}
+
 DISABLE_VS_WARNINGS(4267)
 
 #define MERROR_VER(x) MCERROR("verify", x)
@@ -3670,7 +3686,158 @@ if (tx.version >= cryptonote::txversion::v2_ringct)
         MERROR_VER("Failed to validate Burn TX reason: " << fail_reason);
         tvc.m_verbose_error = std::move(fail_reason);
         return false;
-      }      
+      }
+    }
+
+    // Confidential Asset operation validation
+    if (rv.type == rct::RCTType::ConfidentialAssets)
+    {
+      tx_extra_asset_registration op;
+      if (!get_field_from_tx_extra(tx.extra, op))
+      {
+        MERROR_VER("CA tx missing asset registration extra field");
+        tvc.m_invalid_input = true;
+        return false;
+      }
+
+      switch (op.op_type)
+      {
+        case asset_operation_type::REGISTER:
+        {
+          if (op.descriptor.ticker.empty() || op.descriptor.ticker.size() > 10)
+          {
+            MERROR_VER("CA REGISTER: ticker must be 1-10 characters");
+            return false;
+          }
+          if (op.descriptor.full_name.empty() || op.descriptor.full_name.size() > 64)
+          {
+            MERROR_VER("CA REGISTER: full_name must be 1-64 characters");
+            return false;
+          }
+          if (op.descriptor.meta_info.size() > 1024)
+          {
+            MERROR_VER("CA REGISTER: meta_info must not exceed 1024 characters");
+            return false;
+          }
+          if (op.descriptor.total_max_supply == 0)
+          {
+            MERROR_VER("CA REGISTER: total_max_supply must be greater than zero");
+            return false;
+          }
+          if (op.descriptor.owner == crypto::null_pkey)
+          {
+            MERROR_VER("CA REGISTER: owner public key must be set");
+            return false;
+          }
+          // asset_id must equal hash of the descriptor (with current_supply=0)
+          const crypto::hash expected_id = cryptonote::asset_descriptor_id(op.descriptor);
+          if (op.asset_id != expected_id)
+          {
+            MERROR_VER("CA REGISTER: asset_id does not match descriptor hash");
+            return false;
+          }
+          if (m_db->asset_descriptor_exists(op.asset_id))
+          {
+            MERROR_VER("CA REGISTER: asset already registered");
+            tvc.m_double_spend = true;
+            return false;
+          }
+          break;
+        }
+
+        case asset_operation_type::EMIT:
+        {
+          if (op.amount == 0)
+          {
+            MERROR_VER("CA EMIT: amount must be greater than zero");
+            return false;
+          }
+          cryptonote::asset_descriptor_base desc;
+          if (!m_db->get_asset_descriptor(op.asset_id, desc))
+          {
+            MERROR_VER("CA EMIT: asset not registered");
+            return false;
+          }
+          if (desc.current_supply + op.amount < desc.current_supply ||  // overflow
+              desc.current_supply + op.amount > desc.total_max_supply)
+          {
+            MERROR_VER("CA EMIT: would exceed total_max_supply");
+            return false;
+          }
+          const crypto::hash msg = make_asset_sig_message(op.op_type, op.asset_id, op.amount);
+          if (!crypto::check_signature(msg, desc.owner, op.owner_sig))
+          {
+            MERROR_VER("CA EMIT: invalid owner signature");
+            return false;
+          }
+          break;
+        }
+
+        case asset_operation_type::BURN:
+        {
+          if (op.amount == 0)
+          {
+            MERROR_VER("CA BURN: amount must be greater than zero");
+            return false;
+          }
+          cryptonote::asset_descriptor_base desc;
+          if (!m_db->get_asset_descriptor(op.asset_id, desc))
+          {
+            MERROR_VER("CA BURN: asset not registered");
+            return false;
+          }
+          if (op.amount > desc.current_supply)
+          {
+            MERROR_VER("CA BURN: amount exceeds current_supply");
+            return false;
+          }
+          const crypto::hash msg = make_asset_sig_message(op.op_type, op.asset_id, op.amount);
+          if (!crypto::check_signature(msg, desc.owner, op.owner_sig))
+          {
+            MERROR_VER("CA BURN: invalid owner signature");
+            return false;
+          }
+          break;
+        }
+
+        case asset_operation_type::UPDATE:
+        {
+          if (op.descriptor.ticker.size() > 10)
+          {
+            MERROR_VER("CA UPDATE: ticker must be at most 10 characters");
+            return false;
+          }
+          if (op.descriptor.full_name.size() > 64)
+          {
+            MERROR_VER("CA UPDATE: full_name must be at most 64 characters");
+            return false;
+          }
+          if (op.descriptor.meta_info.size() > 1024)
+          {
+            MERROR_VER("CA UPDATE: meta_info must not exceed 1024 characters");
+            return false;
+          }
+          cryptonote::asset_descriptor_base desc;
+          if (!m_db->get_asset_descriptor(op.asset_id, desc))
+          {
+            MERROR_VER("CA UPDATE: asset not registered");
+            return false;
+          }
+          // amount=0 for UPDATE; still use the same signature scheme for consistency
+          const crypto::hash msg = make_asset_sig_message(op.op_type, op.asset_id, 0);
+          if (!crypto::check_signature(msg, desc.owner, op.owner_sig))
+          {
+            MERROR_VER("CA UPDATE: invalid owner signature");
+            return false;
+          }
+          break;
+        }
+
+        default:
+          MERROR_VER("CA: unknown asset operation type");
+          tvc.m_invalid_input = true;
+          return false;
+      }
     }
   }
   }
