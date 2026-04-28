@@ -797,8 +797,12 @@ try_again:
         size_t logM, inv_offset;
     };
 
-    // Given a batch of range proofs, determine if they are all valid
-    bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs)
+    // Internal verifier shared by bulletproof_plus_VERIFY and bulletproof_plus_VERIFY_CA.
+    //
+    // 'h_key' is the value generator used in commitments V = gamma*G + amount*h.
+    //   Standard BP+:  h_key = rct::H
+    //   Confidential-assets BP+: h_key = ca::get_U()
+    static bool bulletproof_plus_VERIFY_impl(const std::vector<const BulletproofPlus*> &proofs, const rct::key &h_key)
     {
         init_exponents();
 
@@ -1089,8 +1093,11 @@ try_again:
         }
 
         // Verify all proofs in the weighted batch
+        // h_key is the value generator: rct::H for standard BP+, U for CA BP+.
+        ge_p3 h_p3;
+        ge_frombytes_vartime(&h_p3, h_key.bytes);
         multiexp_data.emplace_back(G_scalar, rct::G);
-        multiexp_data.emplace_back(H_scalar, rct::H);
+        multiexp_data.emplace_back(H_scalar, h_p3);
         for (size_t i = 0; i < maxMN; ++i)
         {
             multiexp_data[i * 2] = {Gi_scalars[i], Gi_p3[i]};
@@ -1105,19 +1112,48 @@ try_again:
         return true;
     }
 
+    // Standard BP+ verifier: uses rct::H as the value generator.
+    bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs)
+    {
+        return bulletproof_plus_VERIFY_impl(proofs, rct::H);
+    }
+
     bool bulletproof_plus_VERIFY(const std::vector<BulletproofPlus> &proofs)
     {
         std::vector<const BulletproofPlus*> proof_pointers;
         proof_pointers.reserve(proofs.size());
         for (const BulletproofPlus &proof: proofs)
             proof_pointers.push_back(&proof);
-        return bulletproof_plus_VERIFY(proof_pointers);
+        return bulletproof_plus_VERIFY_impl(proof_pointers, rct::H);
     }
 
     bool bulletproof_plus_VERIFY(const BulletproofPlus &proof)
     {
         std::vector<const BulletproofPlus*> proofs;
         proofs.push_back(&proof);
-        return bulletproof_plus_VERIFY(proofs);
+        return bulletproof_plus_VERIFY_impl(proofs, rct::H);
+    }
+
+    // CA BP+ verifier: uses 'h' (typically U = ca::get_U()) as the value generator.
+    // Commitments in CA are E'_j = e_j*U + y'_j*G rather than gamma*G + amount*H.
+    bool bulletproof_plus_VERIFY_CA(const std::vector<const BulletproofPlus*> &proofs, const rct::key &h)
+    {
+        return bulletproof_plus_VERIFY_impl(proofs, h);
+    }
+
+    bool bulletproof_plus_VERIFY_CA(const std::vector<BulletproofPlus> &proofs, const rct::key &h)
+    {
+        std::vector<const BulletproofPlus*> proof_pointers;
+        proof_pointers.reserve(proofs.size());
+        for (const BulletproofPlus &proof: proofs)
+            proof_pointers.push_back(&proof);
+        return bulletproof_plus_VERIFY_impl(proof_pointers, h);
+    }
+
+    bool bulletproof_plus_VERIFY_CA(const BulletproofPlus &proof, const rct::key &h)
+    {
+        std::vector<const BulletproofPlus*> proofs;
+        proofs.push_back(&proof);
+        return bulletproof_plus_VERIFY_impl(proofs, h);
     }
 }
