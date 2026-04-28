@@ -38,6 +38,7 @@
 #include "common/hex.h"
 #include "beldex_economy.h"
 #include "cryptonote_basic.h"
+#include "cryptonote_core/asset_types.h"
 
 
 namespace cryptonote {
@@ -63,6 +64,7 @@ constexpr uint8_t
   TX_EXTRA_TAG_MASTER_NODE_STATE_CHANGE  = 0x78,
   TX_EXTRA_TAG_BURN                       = 0x79,
   TX_EXTRA_TAG_BELDEX_NAME_SYSTEM           = 0x7A,
+  TX_EXTRA_TAG_ASSET_REGISTRATION          = 0x7B,  // confidential asset: register/emit/burn/update
   TX_EXTRA_TAG_SECURITY_SIGNATURE          = 0x88,
   TX_EXTRA_MYSTERIOUS_MINERGATE_TAG       = 0xDE;
 
@@ -619,6 +621,46 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
+  // ---------------------------------------------------------------------------
+  // Confidential Asset registration / operation extra field
+  //
+  // Carried in transactions that perform one of:
+  //   REGISTER – first publication of an asset on-chain; burns BDX as fee
+  //   EMIT     – mint new tokens (owner-signed)
+  //   UPDATE   – update mutable descriptor fields (owner-signed)
+  //   BURN     – destroy tokens (owner-signed)
+  //
+  // For REGISTER the descriptor field is fully populated.
+  // For EMIT/BURN/UPDATE, only the operation and asset_id are required;
+  // the full descriptor is looked up from the blockchain.
+  // ---------------------------------------------------------------------------
+  struct tx_extra_asset_registration
+  {
+    asset_operation_type     op_type;
+    asset_descriptor_base    descriptor;  // populated for REGISTER; empty otherwise
+    crypto::hash             asset_id;    // computed from descriptor on REGISTER,
+                                         // provided directly for EMIT/BURN/UPDATE
+    // Tokens to mint (EMIT) or destroy (BURN).  Zero for REGISTER/UPDATE.
+    uint64_t                 amount = 0;
+
+    // Owner signature over cn_fast_hash(op_type || asset_id || le64(amount)).
+    // Not required for REGISTER (anyone may register; ownership is proved by
+    // the owner public key embedded in the descriptor).
+    crypto::signature        owner_sig = {};
+
+    BEGIN_SERIALIZE_OBJECT()
+      ENUM_FIELD(op_type,
+        op_type == asset_operation_type::REGISTER ||
+        op_type == asset_operation_type::EMIT     ||
+        op_type == asset_operation_type::UPDATE   ||
+        op_type == asset_operation_type::BURN)
+      FIELD(descriptor)
+      FIELD(asset_id)
+      VARINT_FIELD(amount)
+      FIELD(owner_sig)
+    END_SERIALIZE()
+  };
+
   // tx_extra_field format, except tx_extra_padding and tx_extra_pub_key:
   //   varint tag;
   //   varint size;
@@ -639,6 +681,7 @@ namespace cryptonote
       tx_extra_master_node_pubkey,
       tx_extra_tx_secret_key,
       tx_extra_beldex_name_system,
+      tx_extra_asset_registration,
       tx_extra_tx_key_image_proofs,
       tx_extra_tx_key_image_unlock,
       tx_extra_burn,
@@ -669,4 +712,5 @@ BINARY_VARIANT_TAG(cryptonote::tx_extra_tx_key_image_proofs,         cryptonote:
 BINARY_VARIANT_TAG(cryptonote::tx_extra_tx_key_image_unlock,         cryptonote::TX_EXTRA_TAG_TX_KEY_IMAGE_UNLOCK);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_burn,                        cryptonote::TX_EXTRA_TAG_BURN);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_beldex_name_system,            cryptonote::TX_EXTRA_TAG_BELDEX_NAME_SYSTEM);
+BINARY_VARIANT_TAG(cryptonote::tx_extra_asset_registration,            cryptonote::TX_EXTRA_TAG_ASSET_REGISTRATION);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_security_signature,            cryptonote::TX_EXTRA_TAG_SECURITY_SIGNATURE);
