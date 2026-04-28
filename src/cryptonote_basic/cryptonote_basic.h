@@ -92,6 +92,35 @@ namespace cryptonote
     crypto::public_key key;
   };
 
+  // Confidential-asset output (Zarcanum-style).
+  //
+  // Each field is a compressed Ed25519 point or small integer:
+  //   stealth_address   – one-time key   P = (r*V_recv + k*G)   (standard)
+  //   concealing_point  – Q = h*G, where h = Hs(8*r*V_recv, i)
+  //   amount_commitment – E = e*T + y*G  (Pedersen commitment using asset tag T)
+  //   blinded_asset_id  – T = Ht + r_t*X (blinded asset-specific generator)
+  //   encrypted_amount  – amount XOR-masked with Hs(h)
+  //   mix_attr          – ring-signature mixing hint (0 = any, 1 = unmixable)
+  struct txout_zarcanum
+  {
+    txout_zarcanum() = default;
+
+    crypto::public_key stealth_address;
+    crypto::public_key concealing_point;  // Q
+    crypto::public_key amount_commitment; // E
+    crypto::public_key blinded_asset_id;  // T
+    uint64_t           encrypted_amount = 0;
+    uint8_t            mix_attr         = 0;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(stealth_address)
+      FIELD(concealing_point)
+      FIELD(amount_commitment)
+      FIELD(blinded_asset_id)
+      VARINT_FIELD(encrypted_amount)
+      VARINT_FIELD(mix_attr)
+    END_SERIALIZE()
+  };
 
   /* inputs */
 
@@ -148,7 +177,7 @@ namespace cryptonote
 
   using txin_v = std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key>;
 
-  using txout_target_v = std::variant<txout_to_script, txout_to_scripthash, txout_to_key>;
+  using txout_target_v = std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_zarcanum>;
 
   //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
@@ -611,8 +640,9 @@ VARIANT_TAG(cryptonote::txin_gen, "gen", 0xff);
 VARIANT_TAG(cryptonote::txin_to_script, "script", 0x0);
 VARIANT_TAG(cryptonote::txin_to_scripthash, "scripthash", 0x1);
 VARIANT_TAG(cryptonote::txin_to_key, "key", 0x2);
-VARIANT_TAG(cryptonote::txout_to_script, "script", 0x0);
-VARIANT_TAG(cryptonote::txout_to_scripthash, "scripthash", 0x1);
-VARIANT_TAG(cryptonote::txout_to_key, "key", 0x2);
+VARIANT_TAG(cryptonote::txout_to_script,    "script",    0x0);
+VARIANT_TAG(cryptonote::txout_to_scripthash,"scripthash", 0x1);
+VARIANT_TAG(cryptonote::txout_to_key,       "key",        0x2);
+VARIANT_TAG(cryptonote::txout_zarcanum,     "zarcanum",   0x3);
 VARIANT_TAG(cryptonote::transaction, "tx", 0xcc);
 VARIANT_TAG(cryptonote::block, "block", 0xbb);
