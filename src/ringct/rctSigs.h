@@ -137,6 +137,17 @@ namespace rct {
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
     bool verRctNonSemanticsSimple(const rctSig & rv);
     inline bool verRctSimple(const rctSig & rv) { return verRctSemanticsSimple(rv) && verRctNonSemanticsSimple(rv); }
+
+    // Confidential-asset (Zarcanum scheme) verification.
+    //
+    // verRctSemanticsCA    – structural size checks + BP+ range proofs over E'_j.
+    //                        Does NOT require rv.mixRing to be populated.
+    // verRctNonSemanticsCA – CLSAG ring-signature checks + balance proof
+    //                        + UG aggregation proof (requires rv.mixRing).
+    // verRctCA             – runs both in sequence (convenience wrapper).
+    bool verRctSemanticsCA(const rctSig & rv);
+    bool verRctNonSemanticsCA(const rctSig & rv);
+    inline bool verRctCA(const rctSig & rv) { return verRctSemanticsCA(rv) && verRctNonSemanticsCA(rv); }
     xmr_amount decodeRct(const rctSig & rv, const key & sk, unsigned int i, key & mask, hw::device &hwdev);
     xmr_amount decodeRct(const rctSig & rv, const key & sk, unsigned int i, hw::device &hwdev);
     xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key & mask, hw::device &hwdev);
