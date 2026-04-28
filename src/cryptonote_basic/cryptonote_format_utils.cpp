@@ -137,22 +137,70 @@ namespace cryptonote
         LOG_PRINT_L1("Failed to parse transaction from blob, bad outPk size in tx " << get_transaction_hash(tx));
         return false;
       }
-      for (size_t n = 0; n < tx.rct_signatures.outPk.size(); ++n)
+
+      // Populate outPk[n].dest and, for CA transactions, out_asset_tags[n].
+      if (rv.type == rct::RCTType::ConfidentialAssets)
       {
-        if (!std::holds_alternative<txout_to_key>(tx.vout[n].target))
+        // CA outputs use txout_zarcanum which carries the stealth address,
+        // amount commitment E_j, and blinded asset tag T_j separately.
+        rv.out_asset_tags.resize(tx.vout.size());
+        for (size_t n = 0; n < tx.vout.size(); ++n)
         {
-          LOG_PRINT_L1("Unsupported output type in tx " << get_transaction_hash(tx));
-          return false;
+          if (!std::holds_alternative<txout_zarcanum>(tx.vout[n].target))
+          {
+            LOG_PRINT_L1("CA tx output " << n << " is not txout_zarcanum in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          const auto &zout = var::get<txout_zarcanum>(tx.vout[n].target);
+          rv.outPk[n].dest = rct::pk2rct(zout.stealth_address);
+          // outPk[n].mask (E_j) is deserialized from the rctSig blob already.
+          rv.out_asset_tags[n] = rct::pk2rct(zout.blinded_asset_id);
         }
-        rv.outPk[n].dest = rct::pk2rct(var::get<txout_to_key>(tx.vout[n].target).key);
+      }
+      else
+      {
+        for (size_t n = 0; n < tx.rct_signatures.outPk.size(); ++n)
+        {
+          if (!std::holds_alternative<txout_to_key>(tx.vout[n].target))
+          {
+            LOG_PRINT_L1("Unsupported output type in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          rv.outPk[n].dest = rct::pk2rct(var::get<txout_to_key>(tx.vout[n].target).key);
+        }
       }
 
       if (!base_only)
       {
         const bool bulletproof = rct::is_rct_bulletproof(rv.type);
         const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
-        
-        if (bulletproof_plus)
+
+        if (rv.type == rct::RCTType::ConfidentialAssets)
+        {
+          // CA: BP+ V[] = E_prime[j]/8.  E_prime is already in rv.p.ca_ug_proof.
+          // Reconstruct V[] from the aggregation proof rather than from outPk.
+          if (rv.p.bulletproofs_plus.size() != 1)
+          {
+            LOG_PRINT_L1("Failed to parse CA transaction from blob, bad bulletproofs_plus size in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          if (rv.p.bulletproofs_plus[0].L.size() < 6)
+          {
+            LOG_PRINT_L1("Failed to parse CA transaction from blob, bad bulletproofs_plus L size in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          const size_t n_amounts = tx.vout.size();
+          if (rv.p.ca_ug_proof.E_prime.size() != n_amounts)
+          {
+            LOG_PRINT_L1("Failed to parse CA transaction from blob, bad ca_ug_proof.E_prime size in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          rv.p.bulletproofs_plus[0].V.resize(n_amounts);
+          for (size_t i = 0; i < n_amounts; ++i)
+            // V[j] = E_prime[j] / 8  (same INV_EIGHT offset convention as standard BP+)
+            rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.p.ca_ug_proof.E_prime[i], rct::INV_EIGHT);
+        }
+        else if (bulletproof_plus)
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
