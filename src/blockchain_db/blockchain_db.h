@@ -39,6 +39,7 @@
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
+#include "cryptonote_core/asset_types.h"
 
 /** \file
  * Cryptonote Blockchain Database Interface
@@ -1822,6 +1823,28 @@ public:
   /// Removes stored serialized proof mn data associated with the given pubkey.  Returns true if
   /// found, false if not found.
   virtual bool remove_master_node_proof(const crypto::public_key &pubkey) = 0;
+
+  // ---------------------------------------------------------------------------
+  // Confidential Asset registry
+  // ---------------------------------------------------------------------------
+
+  /// Inserts a new asset descriptor.  Throws if asset_id already exists.
+  virtual void add_asset_descriptor(const crypto::hash& asset_id,
+                                    const cryptonote::asset_descriptor_base& desc) = 0;
+
+  /// Returns true and fills `desc` if asset_id is registered; returns false otherwise.
+  virtual bool get_asset_descriptor(const crypto::hash& asset_id,
+                                    cryptonote::asset_descriptor_base& desc) const = 0;
+
+  /// Overwrites the stored descriptor for asset_id.  Throws if not found.
+  virtual void update_asset_descriptor(const crypto::hash& asset_id,
+                                       const cryptonote::asset_descriptor_base& desc) = 0;
+
+  /// Removes the asset descriptor for asset_id.  Returns true if it existed.
+  virtual bool remove_asset_descriptor(const crypto::hash& asset_id) = 0;
+
+  /// Returns true if asset_id is registered.
+  virtual bool asset_descriptor_exists(const crypto::hash& asset_id) const = 0;
 
   // This function accepts an empty timestamps/difficulties array to fill, or
   // a prior timestamps/difficulties array that was filled by a previous call to

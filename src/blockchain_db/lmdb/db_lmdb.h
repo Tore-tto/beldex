@@ -80,6 +80,7 @@ struct mdb_txn_cursors
   MDB_cursor *master_node_proofs;
   MDB_cursor *output_blacklist;
   MDB_cursor *properties;
+  MDB_cursor *asset_descriptors;
 };
 
 struct mdb_rflags
@@ -107,6 +108,7 @@ struct mdb_rflags
   bool m_rf_master_node_data;
   bool m_rf_master_node_proofs;
   bool m_rf_properties;
+  bool m_rf_asset_descriptors;
 };
 
 struct mdb_threadinfo
@@ -442,6 +444,16 @@ private:
   std::unordered_map<crypto::public_key, master_nodes::proof_info> get_all_master_node_proofs() const override;
   bool remove_master_node_proof(const crypto::public_key& pubkey) override;
 
+  // Confidential Asset registry
+  void add_asset_descriptor(const crypto::hash& asset_id,
+                            const cryptonote::asset_descriptor_base& desc) override;
+  bool get_asset_descriptor(const crypto::hash& asset_id,
+                            cryptonote::asset_descriptor_base& desc) const override;
+  void update_asset_descriptor(const crypto::hash& asset_id,
+                               const cryptonote::asset_descriptor_base& desc) override;
+  bool remove_asset_descriptor(const crypto::hash& asset_id) override;
+  bool asset_descriptor_exists(const crypto::hash& asset_id) const override;
+
 private:
   template <typename T,
             std::enable_if_t<std::is_same_v<T, cryptonote::block> ||
@@ -482,6 +494,7 @@ private:
   MDB_dbi m_master_node_proofs;
 
   MDB_dbi m_properties;
+  MDB_dbi m_asset_descriptors;
 
   mutable uint64_t m_cum_size;	// used in batch size estimation
   mutable unsigned int m_cum_count;

@@ -256,7 +256,9 @@ const char* const LMDB_MASTER_NODE_LATEST = "master_node_proofs"; // contains th
 
 const char* const LMDB_PROPERTIES = "properties";
 
-constexpr unsigned int LMDB_DB_COUNT = 23; // Should agree with the number of db's above
+const char* const LMDB_ASSET_DESCRIPTORS = "asset_descriptors";
+
+constexpr unsigned int LMDB_DB_COUNT = 24; // Should agree with the number of db's above
 
 const char zerokey[8] = {0};
 const MDB_val zerokval = { sizeof(zerokey), (void *)zerokey };
@@ -1531,6 +1533,8 @@ void BlockchainLMDB::open(const fs::path& filename, cryptonote::network_type net
 
   lmdb_db_open(txn, LMDB_PROPERTIES, MDB_CREATE, m_properties, "Failed to open db handle for m_properties");
 
+  lmdb_db_open(txn, LMDB_ASSET_DESCRIPTORS, MDB_CREATE, m_asset_descriptors, "Failed to open db handle for m_asset_descriptors");
+
   mdb_set_dupsort(txn, m_spent_keys, compare_hash32);
   mdb_set_dupsort(txn, m_block_heights, compare_hash32);
   mdb_set_compare(txn, m_block_checkpoints, compare_uint64);
@@ -1549,6 +1553,7 @@ void BlockchainLMDB::open(const fs::path& filename, cryptonote::network_type net
   mdb_set_compare(txn, m_alt_blocks, compare_hash32);
   mdb_set_compare(txn, m_master_node_proofs, compare_hash32);
   mdb_set_compare(txn, m_properties, compare_string);
+  mdb_set_compare(txn, m_asset_descriptors, compare_hash32);
 
   if (!(mdb_flags & MDB_RDONLY))
   {
@@ -6312,6 +6317,128 @@ bool BlockchainLMDB::remove_master_node_proof(const crypto::public_key& pubkey)
   result = mdb_cursor_del(m_cursors->master_node_proofs, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Error remove master node proof", result)));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Confidential Asset registry helpers
+// ---------------------------------------------------------------------------
+
+static std::string serialize_asset_descriptor(const cryptonote::asset_descriptor_base& desc)
+{
+  try {
+    return serialization::dump_binary(const_cast<cryptonote::asset_descriptor_base&>(desc));
+  } catch (const std::exception& e) {
+    throw DB_ERROR(("Failed to serialize asset descriptor: "s + e.what()).c_str());
+  }
+}
+
+static void deserialize_asset_descriptor(const void* data, size_t size,
+                                         cryptonote::asset_descriptor_base& desc)
+{
+  try {
+    serialization::parse_binary(std::string_view{static_cast<const char*>(data), size}, desc);
+  } catch (const std::exception& e) {
+    throw DB_ERROR(("Failed to deserialize asset descriptor: "s + e.what()).c_str());
+  }
+}
+
+void BlockchainLMDB::add_asset_descriptor(const crypto::hash& asset_id,
+                                          const cryptonote::asset_descriptor_base& desc)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  mdb_txn_cursors *m_cursors = &m_wcursors;
+  CURSOR(asset_descriptors)
+
+  std::string blob = serialize_asset_descriptor(desc);
+  MDB_val k{sizeof(asset_id), (void*) &asset_id};
+  MDB_val v{blob.size(), (void*) blob.data()};
+  int result = mdb_cursor_put(m_cursors->asset_descriptors, &k, &v, MDB_NOOVERWRITE);
+  if (result == MDB_KEYEXIST)
+    throw0(DB_ERROR("Asset descriptor already exists"));
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add asset descriptor: ", result)));
+}
+
+bool BlockchainLMDB::get_asset_descriptor(const crypto::hash& asset_id,
+                                           cryptonote::asset_descriptor_base& desc) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  RCURSOR(asset_descriptors);
+
+  MDB_val k{sizeof(asset_id), (void*) &asset_id};
+  MDB_val v;
+  int result = mdb_cursor_get(m_cursors->asset_descriptors, &k, &v, MDB_SET_KEY);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result != MDB_SUCCESS)
+    throw0(DB_ERROR(lmdb_error("Error fetching asset descriptor: ", result)));
+
+  deserialize_asset_descriptor(v.mv_data, v.mv_size, desc);
+  return true;
+}
+
+void BlockchainLMDB::update_asset_descriptor(const crypto::hash& asset_id,
+                                              const cryptonote::asset_descriptor_base& desc)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  mdb_txn_cursors *m_cursors = &m_wcursors;
+  CURSOR(asset_descriptors)
+
+  MDB_val k{sizeof(asset_id), (void*) &asset_id};
+  MDB_val v;
+  int result = mdb_cursor_get(m_cursors->asset_descriptors, &k, &v, MDB_SET_KEY);
+  if (result == MDB_NOTFOUND)
+    throw0(DB_ERROR("Asset descriptor not found for update"));
+  if (result != MDB_SUCCESS)
+    throw0(DB_ERROR(lmdb_error("Error finding asset descriptor for update: ", result)));
+
+  std::string blob = serialize_asset_descriptor(desc);
+  v = {blob.size(), (void*) blob.data()};
+  result = mdb_cursor_put(m_cursors->asset_descriptors, &k, &v, MDB_CURRENT);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to update asset descriptor: ", result)));
+}
+
+bool BlockchainLMDB::remove_asset_descriptor(const crypto::hash& asset_id)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  mdb_txn_cursors *m_cursors = &m_wcursors;
+  CURSOR(asset_descriptors)
+
+  MDB_val k{sizeof(asset_id), (void*) &asset_id};
+  int result = mdb_cursor_get(m_cursors->asset_descriptors, &k, NULL, MDB_SET);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result != MDB_SUCCESS)
+    throw0(DB_ERROR(lmdb_error("Error finding asset descriptor to remove: ", result)));
+  result = mdb_cursor_del(m_cursors->asset_descriptors, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to remove asset descriptor: ", result)));
+  return true;
+}
+
+bool BlockchainLMDB::asset_descriptor_exists(const crypto::hash& asset_id) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  RCURSOR(asset_descriptors);
+
+  MDB_val k{sizeof(asset_id), (void*) &asset_id};
+  MDB_val v;
+  int result = mdb_cursor_get(m_cursors->asset_descriptors, &k, &v, MDB_SET_KEY);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result != MDB_SUCCESS)
+    throw0(DB_ERROR(lmdb_error("Error checking asset descriptor existence: ", result)));
   return true;
 }
 
