@@ -303,13 +303,59 @@ namespace rct {
       Bulletproof2 = 4,
       CLSAG = 5,
       BulletproofPlus = 6,
+      // Confidential Assets: multi-asset RingCT with blinded asset tags,
+      // balance proof over X, and UG aggregation for BP+ range proofs.
+      ConfidentialAssets = 7,
     };
 
-    inline bool is_rct_simple(RCTType type) { return tools::equals_any(type, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus); }
+    inline bool is_rct_simple(RCTType type) { return tools::equals_any(type, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets); }
     inline bool is_rct_bulletproof(RCTType type) { return tools::equals_any(type, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG); }
     inline bool is_rct_borromean(RCTType type) { return tools::equals_any(type, RCTType::Simple, RCTType::Full); }
-    inline bool is_rct_bulletproof_plus(RCTType type) { return tools::equals_any(type, RCTType::BulletproofPlus); }
-    inline bool is_rct_clsag(RCTType type) { return tools::equals_any(type, RCTType::CLSAG, RCTType::BulletproofPlus); }
+    inline bool is_rct_bulletproof_plus(RCTType type) { return tools::equals_any(type, RCTType::BulletproofPlus, RCTType::ConfidentialAssets); }
+    inline bool is_rct_clsag(RCTType type) { return tools::equals_any(type, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets); }
+    inline bool is_rct_confidential_assets(RCTType type) { return type == RCTType::ConfidentialAssets; }
+
+    // ---------------------------------------------------------------------------
+    // Confidential Asset proof structures
+    //
+    // These are self-contained serializable types stored inside rctSigPrunable.
+    // They mirror the ca::double_schnorr_sig and ca::UG_aggregation_proof from
+    // ca_primitives.h but are defined here to avoid circular includes.
+    // ---------------------------------------------------------------------------
+
+    // Balance proof: proves  Balance = r*X + y*G
+    // where Balance = Σ pseudo_out_commitments − Σ output_commitments − fee*H
+    struct ca_balance_proof {
+        key c;    // Fiat-Shamir challenge
+        key y0;   // response for X component
+        key y1;   // response for G component
+
+        template<typename Archive>
+        void serialize(Archive& ar) {
+            field(ar, "c",  c);
+            field(ar, "y0", y0);
+            field(ar, "y1", y1);
+        }
+    };
+
+    // Vector UG aggregation proof: links per-asset E_j to fixed-U E'_j for BP+.
+    //   E_j  = e_j*T_j + y_j*G      (output commitment, asset-specific T_j)
+    //   E'_j = e_j*U  + y'_j*G      (aggregation commitment, fixed generator U)
+    //   D_j  = E_j - E'_j = e_j*(T_j-U) + y''_j*G
+    struct ca_UG_aggregation_proof {
+        keyV E_prime;  // E'_j per output (included so verifier can run BP+)
+        key  c;        // shared Fiat-Shamir challenge
+        keyV y0s;      // per-output response for (T_j-U) component
+        keyV y1s;      // per-output response for G component
+
+        template<typename Archive>
+        void serialize(Archive& ar) {
+            field(ar, "E_prime", E_prime);
+            field(ar, "c",       c);
+            field(ar, "y0s",     y0s);
+            field(ar, "y1s",     y1s);
+        }
+    };
 
     enum class RangeProofType : uint8_t { Borromean = 0, Bulletproof = 1, MultiOutputBulletproof = 2, PaddedBulletproof = 3 };
     struct RCTConfig {
@@ -326,13 +372,25 @@ namespace rct {
         ctkeyV outPk;
         xmr_amount txnFee; // contains b
 
+        // Confidential-asset fields (only populated when type == ConfidentialAssets):
+        //   pseudo_out_asset_tags[i] = T_i^p = blinded asset tag for input i's
+        //   pseudo-output commitment.  Needed by verifiers to run the asset
+        //   surjection proof (each output's T must derive from one of these).
+        keyV pseudo_out_asset_tags;
+
+        //   out_asset_tags[j] = T_j = blinded asset tag for output j.
+        //   Extracted from txout_zarcanum::blinded_asset_id by blockchain.cpp
+        //   and stored here so rctSig verification functions can access them
+        //   without requiring the full transaction output list.
+        keyV out_asset_tags;
+
         template <typename Archive>
         void serialize_rctsig_base(Archive &ar, size_t inputs, size_t outputs)
         {
             field_varint(ar, "type", type);
             if (type == RCTType::Null)
                 return;
-            if (!tools::equals_any(type, RCTType::Full, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus))
+            if (!tools::equals_any(type, RCTType::Full, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets))
                 throw std::invalid_argument{"invalid ringct type"};
 
             field_varint(ar, "txnFee", txnFee);
@@ -349,7 +407,7 @@ namespace rct {
 
             {
                 auto arr = start_array(ar, "ecdhInfo", ecdhInfo, outputs);
-                if (tools::equals_any(type, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus))
+                if (tools::equals_any(type, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets))
                 {
                     for (auto& e : ecdhInfo) {
                         auto obj = ar.begin_object();
@@ -368,6 +426,24 @@ namespace rct {
                 for (auto& e : outPk)
                     value(ar, e.mask);
             }
+
+            // Confidential-asset extra: pseudo-output and output asset tags.
+            // T_i^p is the blinded asset tag used to construct pseudo-output
+            // commitment A_i^p = a_i*T_i^p + f_i'*G.
+            // T_j is the blinded asset tag for output j (from txout_zarcanum).
+            if (type == RCTType::ConfidentialAssets)
+            {
+                {
+                    auto arr = start_array(ar, "pseudo_out_asset_tags", pseudo_out_asset_tags, inputs);
+                    for (auto& t : pseudo_out_asset_tags)
+                        value(ar, t);
+                }
+                {
+                    auto arr = start_array(ar, "out_asset_tags", out_asset_tags, outputs);
+                    for (auto& t : out_asset_tags)
+                        value(ar, t);
+                }
+            }
         }
     };
     struct rctSigPrunable {
@@ -378,13 +454,18 @@ namespace rct {
         std::vector<clsag> CLSAGs;
         keyV pseudoOuts; //C - for simple rct
 
+        // Confidential-asset proofs (only populated for ConfidentialAssets txs):
+        ca_balance_proof      ca_balance;    // proves Balance = r*X + y*G
+        ca_UG_aggregation_proof ca_ug_proof; // links E_j (asset-specific) to E'_j (BP+ input)
+        // ca_surjection_proofs: per-output BGE proofs added in Phase 4
+
         // when changing this function, update cryptonote::get_pruned_transaction_weight
         template<typename Archive>
         void serialize_rctsig_prunable(Archive &ar, RCTType type, size_t inputs, size_t outputs, size_t mixin)
         {
             if (type == RCTType::Null)
                 return;
-            if (!tools::equals_any(type, RCTType::Full, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus))
+            if (!tools::equals_any(type, RCTType::Full, RCTType::Simple, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets))
                 throw std::invalid_argument{"invalid ringct type"};
             if (rct::is_rct_bulletproof_plus(type))
             {
@@ -423,7 +504,7 @@ namespace rct {
                     value(ar, s);
             }
 
-            if (type == RCTType::CLSAG || type == RCTType::BulletproofPlus)
+            if (tools::equals_any(type, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets))
             {
                 auto arr = start_array(ar, "CLSAGs", CLSAGs, inputs);
 
@@ -481,11 +562,42 @@ namespace rct {
                     }
                 }
             }
-            if (tools::equals_any(type, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus))
+            if (tools::equals_any(type, RCTType::Bulletproof, RCTType::Bulletproof2, RCTType::CLSAG, RCTType::BulletproofPlus, RCTType::ConfidentialAssets))
             {
                 auto arr = start_array(ar, "pseudoOuts", pseudoOuts, inputs);
                 for (auto& o : pseudoOuts)
                     value(ar, o);
+            }
+
+            // Confidential-asset additional proofs:
+            //   ca_balance  – double Schnorr on the balance point
+            //   ca_ug_proof – UG aggregation linking E_j to E'_j (BP+ inputs)
+            if (type == RCTType::ConfidentialAssets)
+            {
+                {
+                    auto obj = ar.begin_object();
+                    field(ar, "ca_balance_c",  ca_balance.c);
+                    field(ar, "ca_balance_y0", ca_balance.y0);
+                    field(ar, "ca_balance_y1", ca_balance.y1);
+                }
+                {
+                    auto obj = ar.begin_object();
+                    uint32_t n = static_cast<uint32_t>(ca_ug_proof.E_prime.size());
+                    field_varint(ar, "ca_ug_n", n);
+                    {
+                        auto arr = start_array(ar, "ca_ug_Ep", ca_ug_proof.E_prime, n);
+                        for (auto& e : ca_ug_proof.E_prime) value(ar, e);
+                    }
+                    field(ar, "ca_ug_c", ca_ug_proof.c);
+                    {
+                        auto arr = start_array(ar, "ca_ug_y0s", ca_ug_proof.y0s, n);
+                        for (auto& y : ca_ug_proof.y0s) value(ar, y);
+                    }
+                    {
+                        auto arr = start_array(ar, "ca_ug_y1s", ca_ug_proof.y1s, n);
+                        for (auto& y : ca_ug_proof.y1s) value(ar, y);
+                    }
+                }
             }
         }
 
@@ -496,6 +608,8 @@ namespace rct {
           FIELD(MGs)
           FIELD(CLSAGs)
           FIELD(pseudoOuts)
+          FIELD(ca_balance)
+          FIELD(ca_ug_proof)
         END_SERIALIZE()
     };
     struct rctSig: public rctSigBase {
@@ -503,12 +617,12 @@ namespace rct {
 
         keyV& get_pseudo_outs()
         {
-          return (type == RCTType::Bulletproof || type == RCTType::Bulletproof2 || type == RCTType::CLSAG || type == RCTType::BulletproofPlus) ? p.pseudoOuts : pseudoOuts;
+          return (type == RCTType::Bulletproof || type == RCTType::Bulletproof2 || type == RCTType::CLSAG || type == RCTType::BulletproofPlus || type == RCTType::ConfidentialAssets) ? p.pseudoOuts : pseudoOuts;
         }
 
         keyV const& get_pseudo_outs() const
         {
-          return (type == RCTType::Bulletproof || type == RCTType::Bulletproof2 || type == RCTType::CLSAG || type == RCTType::BulletproofPlus) ? p.pseudoOuts : pseudoOuts;
+          return (type == RCTType::Bulletproof || type == RCTType::Bulletproof2 || type == RCTType::CLSAG || type == RCTType::BulletproofPlus || type == RCTType::ConfidentialAssets) ? p.pseudoOuts : pseudoOuts;
         }
     };
 
