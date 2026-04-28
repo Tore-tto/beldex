@@ -3223,7 +3223,7 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       }
     }
   }
-  else if (tools::equals_any(rv.type, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus))
+  else if (tools::equals_any(rv.type, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus, rct::RCTType::ConfidentialAssets))
   {
     CHECK_AND_ASSERT_MES(!pubkeys.empty() && !pubkeys[0].empty(), false, "empty pubkeys");
     rv.mixRing.resize(pubkeys.size());
@@ -3499,6 +3499,64 @@ if (tx.version >= cryptonote::txversion::v2_ringct)
       if (!rct::verRctNonSemanticsSimple(rv))
       {
         MERROR_VER("Failed to check ringct signatures!");
+        return false;
+      }
+      break;
+    }
+    case rct::RCTType::ConfidentialAssets:
+    {
+      // Confidential-asset transaction: uses CLSAG ring sigs (same structure as
+      // BulletproofPlus) plus a balance proof and UG aggregation proof.
+      // pubkeys/mixRing consistency check is identical to the Simple/CLSAG path.
+      if (pubkeys.size() != rv.mixRing.size())
+      {
+        MERROR_VER("CA: Failed to check ringct signatures: mismatched pubkeys/mixRing size");
+        return false;
+      }
+      for (size_t i = 0; i < pubkeys.size(); ++i)
+      {
+        if (pubkeys[i].size() != rv.mixRing[i].size())
+        {
+          MERROR_VER("CA: Failed to check ringct signatures: mismatched pubkeys/mixRing size");
+          return false;
+        }
+      }
+      for (size_t n = 0; n < pubkeys.size(); ++n)
+      {
+        for (size_t m = 0; m < pubkeys[n].size(); ++m)
+        {
+          if (pubkeys[n][m].dest != rct::rct2pk(rv.mixRing[n][m].dest))
+          {
+            MERROR_VER("CA: Failed to check ringct signatures: mismatched pubkey at vin " << n << ", index " << m);
+            return false;
+          }
+          if (pubkeys[n][m].mask != rct::rct2pk(rv.mixRing[n][m].mask))
+          {
+            MERROR_VER("CA: Failed to check ringct signatures: mismatched commitment at vin " << n << ", index " << m);
+            return false;
+          }
+        }
+      }
+
+      // Key image consistency (CLSAG stores key image in CLSAG.I)
+      if (rv.p.CLSAGs.size() != tx.vin.size())
+      {
+        MERROR_VER("CA: Failed to check ringct signatures: mismatched CLSAGs/vin sizes");
+        return false;
+      }
+      for (size_t n = 0; n < tx.vin.size(); ++n)
+      {
+        if (memcmp(&var::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.CLSAGs[n].I, 32))
+        {
+          MERROR_VER("CA: Failed to check ringct signatures: mismatched key image for input " << n);
+          return false;
+        }
+      }
+
+      // Full CA non-semantics check: CLSAG ring sigs + balance proof + UG aggregation.
+      if (!rct::verRctNonSemanticsCA(rv))
+      {
+        MERROR_VER("CA: Failed to check ringct signatures!");
         return false;
       }
       break;
