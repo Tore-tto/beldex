@@ -37,6 +37,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "bulletproofs_plus.h"
+#include "ca_primitives.h"
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "ringct"
@@ -833,6 +834,31 @@ namespace rct {
           kv.push_back(p.t);
         }
       }
+      else if (rct::is_rct_confidential_assets(rv.type))
+      {
+        // Hash CA-specific prunable data: BP+ proofs (A,A1,B,r1,s1,d1,L,R),
+        // balance proof scalars, and UG aggregation proof scalars.
+        // V[] are NOT hashed (derived from E_prime which is in rctSigBase).
+        for (const auto &p: rv.p.bulletproofs_plus)
+        {
+          kv.push_back(p.A);
+          kv.push_back(p.A1);
+          kv.push_back(p.B);
+          kv.push_back(p.r1);
+          kv.push_back(p.s1);
+          kv.push_back(p.d1);
+          for (size_t n = 0; n < p.L.size(); ++n)
+            kv.push_back(p.L[n]);
+          for (size_t n = 0; n < p.R.size(); ++n)
+            kv.push_back(p.R[n]);
+        }
+        kv.push_back(rv.p.ca_balance.c);
+        kv.push_back(rv.p.ca_balance.y0);
+        kv.push_back(rv.p.ca_balance.y1);
+        kv.push_back(rv.p.ca_ug_proof.c);
+        for (const auto &y : rv.p.ca_ug_proof.y0s) kv.push_back(y);
+        for (const auto &y : rv.p.ca_ug_proof.y1s) kv.push_back(y);
+      }
       else
       {
         kv.reserve((64*3+1) * rv.p.rangeSigs.size());
@@ -1477,6 +1503,248 @@ namespace rct {
         }
     }
 
+    // ---------------------------------------------------------------------------
+    // Confidential-asset (Zarcanum) semantic verification.
+    //
+    // Checks that:
+    //   1.  Structural sizes are consistent (CLSAGs, pseudoOuts, asset tags, BP+).
+    //   2.  BP+ range proofs verify over E'_j (the UG aggregation commitments).
+    //   3.  BP+ V[] matches ca_ug_proof.E_prime[] (cross-check against tampering).
+    //
+    // Does NOT require rv.mixRing to be populated; ring-sig and balance/UG proof
+    // verification happen in verRctNonSemanticsCA.
+    // ---------------------------------------------------------------------------
+    bool verRctSemanticsCA(const rctSig &rv)
+    {
+      try
+      {
+        PERF_TIMER(verRctSemanticsCA);
+
+        // --- 1. Type check ---
+        CHECK_AND_ASSERT_MES(rv.type == RCTType::ConfidentialAssets,
+          false, "verRctSemanticsCA called on non-CA rctSig");
+
+        const size_t n_out = rv.outPk.size();
+        const size_t n_in  = rv.p.pseudoOuts.size();
+
+        // --- 2. Structural size checks ---
+        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false,
+          "CA: rv.pseudoOuts must be empty (use rv.p.pseudoOuts)");
+        CHECK_AND_ASSERT_MES(rv.p.MGs.empty(), false,
+          "CA: MGs must be empty (CA uses CLSAGs)");
+        CHECK_AND_ASSERT_MES(rv.p.CLSAGs.size() == n_in, false,
+          "CA: Mismatched CLSAGs and p.pseudoOuts sizes");
+        CHECK_AND_ASSERT_MES(rv.pseudo_out_asset_tags.size() == n_in, false,
+          "CA: Mismatched pseudo_out_asset_tags and p.pseudoOuts sizes");
+        CHECK_AND_ASSERT_MES(rv.out_asset_tags.size() == n_out, false,
+          "CA: Mismatched out_asset_tags and outPk sizes");
+        CHECK_AND_ASSERT_MES(rv.ecdhInfo.size() == n_out, false,
+          "CA: Mismatched ecdhInfo and outPk sizes");
+        CHECK_AND_ASSERT_MES(rv.p.ca_ug_proof.E_prime.size() == n_out, false,
+          "CA: Mismatched ca_ug_proof.E_prime and outPk sizes");
+        CHECK_AND_ASSERT_MES(rv.p.ca_ug_proof.y0s.size() == n_out, false,
+          "CA: Mismatched ca_ug_proof.y0s and outPk sizes");
+        CHECK_AND_ASSERT_MES(rv.p.ca_ug_proof.y1s.size() == n_out, false,
+          "CA: Mismatched ca_ug_proof.y1s and outPk sizes");
+        CHECK_AND_ASSERT_MES(n_out > 0, false, "CA: transaction has no outputs");
+        CHECK_AND_ASSERT_MES(n_in  > 0, false, "CA: transaction has no inputs");
+
+        // BP+ covers E_prime[], so the total amount count must equal n_out.
+        CHECK_AND_ASSERT_MES(!rv.p.bulletproofs_plus.empty(), false,
+          "CA: transaction has no bulletproofs_plus");
+        CHECK_AND_ASSERT_MES(n_out == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
+          false, "CA: Mismatched E_prime count and bulletproofs_plus amount count");
+
+        // --- 3. Cross-check BP+ V[] against ca_ug_proof.E_prime[] ---
+        // The wallet stores E'_j / 8 in proof.V[j] (cofactor offset convention).
+        // The verifier recovers E'_j as 8 * proof.V[j].
+        // We compare this against ca_ug_proof.E_prime[j] to prevent a split-proof
+        // attack where BP+ proves range for different commitments than the UG proof.
+        {
+          size_t ep_idx = 0;
+          for (const auto &bpp : rv.p.bulletproofs_plus)
+          {
+            for (const auto &v : bpp.V)
+            {
+              if (ep_idx >= n_out)
+              {
+                LOG_PRINT_L1("CA: more BP+ V[] entries than ca_ug_proof.E_prime entries");
+                return false;
+              }
+              // 8 * proof.V[j] should equal the stored E_prime[j]
+              const key v8 = scalarmult8(v);
+              if (v8 != rv.p.ca_ug_proof.E_prime[ep_idx])
+              {
+                LOG_PRINT_L1("CA: BP+ V[" << ep_idx << "] (x8) does not match ca_ug_proof.E_prime[" << ep_idx << "]");
+                return false;
+              }
+              ++ep_idx;
+            }
+          }
+          if (ep_idx != n_out)
+          {
+            LOG_PRINT_L1("CA: fewer BP+ V[] entries than ca_ug_proof.E_prime entries");
+            return false;
+          }
+        }
+
+        // --- 4. Verify BP+ range proofs over E'_j (using generator U) ---
+        // The CA variant uses U (ca::get_U()) instead of rct::H as the value
+        // generator, matching the E'_j = e_j*U + y'_j*G commitment scheme.
+        {
+          std::vector<const BulletproofPlus*> bpp_ptrs;
+          bpp_ptrs.reserve(rv.p.bulletproofs_plus.size());
+          for (const auto &bpp : rv.p.bulletproofs_plus)
+            bpp_ptrs.push_back(&bpp);
+
+          if (!bulletproof_plus_VERIFY_CA(bpp_ptrs, ca::get_U()))
+          {
+            LOG_PRINT_L1("CA: bulletproofs_plus verification failed");
+            return false;
+          }
+        }
+
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsCA: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsCA, but not an actual exception");
+        return false;
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Confidential-asset non-semantic verification.
+    //
+    // Requires rv.mixRing to be populated.  Checks:
+    //   1.  mixRing / CLSAGs size consistency.
+    //   2.  CLSAG ring signatures for every input.
+    //   3.  Balance proof: Balance = Σ pseudo_out_commitments
+    //                              − Σ output_commitments
+    //                              − fee*H
+    //                    is proved equal to r*X + y*G via double-Schnorr.
+    //   4.  UG aggregation proof: links output commitments E_j to the
+    //       fixed-generator aggregation commitments E'_j used by BP+.
+    // ---------------------------------------------------------------------------
+    bool verRctNonSemanticsCA(const rctSig &rv)
+    {
+      try
+      {
+        PERF_TIMER(verRctNonSemanticsCA);
+
+        CHECK_AND_ASSERT_MES(rv.type == RCTType::ConfidentialAssets,
+          false, "verRctNonSemanticsCA called on non-CA rctSig");
+
+        const size_t n_in  = rv.p.pseudoOuts.size();
+        const size_t n_out = rv.outPk.size();
+
+        // --- 1. mixRing / CLSAGs consistency ---
+        CHECK_AND_ASSERT_MES(rv.mixRing.size() == n_in, false,
+          "CA: Mismatched mixRing and p.pseudoOuts sizes");
+
+        // --- 2. Compute the Fiat-Shamir transcript (same as CLSAG) ---
+        const key m = get_pre_clsag_hash(rv, hw::get_device("default"));
+
+        // --- 3. CLSAG ring signatures ---
+        // Each CLSAG proves: the spender owns one key in the ring at input i,
+        // and commits to the pseudo-output commitment rv.p.pseudoOuts[i].
+        {
+          const size_t threads = rv.mixRing.size();
+          std::deque<bool> results(threads);
+          tools::threadpool& tpool = tools::threadpool::getInstance();
+          tools::threadpool::waiter waiter;
+
+          for (size_t i = 0; i < rv.mixRing.size(); ++i)
+          {
+            tpool.submit(&waiter, [&, i] {
+              results[i] = verRctCLSAGSimple(m, rv.p.CLSAGs[i], rv.mixRing[i], rv.p.pseudoOuts[i]);
+            });
+          }
+          waiter.wait(&tpool);
+
+          for (size_t i = 0; i < results.size(); ++i)
+          {
+            if (!results[i])
+            {
+              LOG_PRINT_L1("CA: CLSAG verification failed for input " << i);
+              return false;
+            }
+          }
+        }
+
+        // --- 4. Compute the balance point ---
+        // Balance = Σ pseudo_out_commitments − Σ output_commitments − fee*H
+        // The balance proof (double-Schnorr) shows Balance = r*X + y*G,
+        // i.e., the difference is a commitment to zero under the asset blinding.
+        key sumPseudo = addKeys(rv.p.pseudoOuts);
+
+        key sumOutputs = identity();
+        for (size_t j = 0; j < n_out; ++j)
+          addKeys(sumOutputs, sumOutputs, rv.outPk[j].mask);
+
+        const key feeKey = scalarmultH(d2h(rv.txnFee));
+        addKeys(sumOutputs, sumOutputs, feeKey);
+
+        key Balance;
+        subKeys(Balance, sumPseudo, sumOutputs);
+
+        // --- 5. Verify balance proof ---
+        {
+          ca::double_schnorr_sig bal_sig;
+          bal_sig.c  = rv.p.ca_balance.c;
+          bal_sig.y0 = rv.p.ca_balance.y0;
+          bal_sig.y1 = rv.p.ca_balance.y1;
+
+          if (!ca::verify_balance_proof(m, Balance, bal_sig))
+          {
+            LOG_PRINT_L1("CA: balance proof verification failed");
+            return false;
+          }
+        }
+
+        // --- 6. Verify UG aggregation proof ---
+        // E[j] = outPk[j].mask  (output commitments E_j = e_j*T_j + y_j*G)
+        // T[j] = out_asset_tags[j]  (blinded asset tags T_j for each output)
+        {
+          std::vector<key> E(n_out), T(n_out);
+          for (size_t j = 0; j < n_out; ++j)
+          {
+            E[j] = rv.outPk[j].mask;
+            T[j] = rv.out_asset_tags[j];
+          }
+
+          ca::UG_aggregation_proof ug;
+          ug.E_prime = rv.p.ca_ug_proof.E_prime;
+          ug.c       = rv.p.ca_ug_proof.c;
+          ug.y0s     = rv.p.ca_ug_proof.y0s;
+          ug.y1s     = rv.p.ca_ug_proof.y1s;
+
+          if (!ca::verify_UG_aggregation_proof(m, E, T, ug))
+          {
+            LOG_PRINT_L1("CA: UG aggregation proof verification failed");
+            return false;
+          }
+        }
+
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verRctNonSemanticsCA: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verRctNonSemanticsCA, but not an actual exception");
+        return false;
+      }
+    }
+
     //ver RingCT simple
     //assumes only post-rct style inputs (at least for max anonymity)
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rvv) {
@@ -1496,7 +1764,7 @@ namespace rct {
           CHECK_AND_ASSERT_MES(rvp, false, "rctSig pointer is NULL");
           const rctSig &rv = *rvp;
           CHECK_AND_ASSERT_MES(rv.type == RCTType::Simple || rv.type == RCTType::Bulletproof || rv.type == RCTType::Bulletproof2 || rv.type == RCTType::CLSAG || rv.type == RCTType::BulletproofPlus,
-            false, "verRctSemanticsSimple called on non simple rctSig");
+            false, "verRctSemanticsSimple called on non simple rctSig (use verRctSemanticsCA for ConfidentialAssets)");
           const bool bulletproof = is_rct_bulletproof(rv.type);
           const bool bulletproof_plus = is_rct_bulletproof_plus(rv.type);
           if (bulletproof || bulletproof_plus)
@@ -1619,8 +1887,8 @@ namespace rct {
       {
         PERF_TIMER(verRctNonSemanticsSimple);
 
-        CHECK_AND_ASSERT_MES(rv.type == RCTType::Simple || rv.type == RCTType::Bulletproof || rv.type == RCTType::Bulletproof2 || rv.type == RCTType::CLSAG || rv.type == RCTType::BulletproofPlus, 
-            false, "verRctNonSemanticsSimple called on non simple rctSig");
+        CHECK_AND_ASSERT_MES(rv.type == RCTType::Simple || rv.type == RCTType::Bulletproof || rv.type == RCTType::Bulletproof2 || rv.type == RCTType::CLSAG || rv.type == RCTType::BulletproofPlus,
+            false, "verRctNonSemanticsSimple called on non simple rctSig (use verRctNonSemanticsCA for ConfidentialAssets)");
         const bool bulletproof = is_rct_bulletproof(rv.type);
         const bool bulletproof_plus = is_rct_bulletproof_plus(rv.type);
         // semantics check is early, and mixRing/MGs aren't resolved yet
