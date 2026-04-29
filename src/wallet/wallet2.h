@@ -50,6 +50,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/beldex_name_system.h"
+#include "cryptonote_core/asset_types.h"
 #include "common/unordered_containers_boost_serialization.h"
 #include "common/file.h"
 #include "crypto/chacha.h"
@@ -311,6 +312,9 @@ private:
       uint64_t unlock_time;
       bool error;
       std::optional<cryptonote::subaddress_receive_info> received;
+      // Confidential asset fields; zero/false for native BDX outputs.
+      crypto::hash asset_id = crypto::null_hash;
+      bool is_ca = false;
 
       tx_scan_info_t(): amount(0), money_transfered(0), error(true) {}
     };
@@ -733,6 +737,10 @@ private:
     // all locked & unlocked balances of all subaddress accounts
     uint64_t balance_all(bool strict) const;
     uint64_t unlocked_balance_all(bool strict, uint64_t *blocks_to_unlock = NULL, uint64_t *time_to_unlock = NULL) const;
+    // confidential-asset per-asset balances
+    uint64_t balance_asset(const crypto::hash& asset_id, uint32_t subaddr_index_major, bool strict) const;
+    std::map<uint32_t, uint64_t> balance_asset_per_subaddress(const crypto::hash& asset_id, uint32_t subaddr_index_major, bool strict) const;
+    std::map<crypto::hash, uint64_t> all_asset_balances(uint32_t subaddr_index_major, bool strict) const;
     void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
       std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs,
       uint64_t unlock_time, uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const rct::RCTConfig &rct_config, const cryptonote::beldex_construct_tx_params &beldex_tx_params);
@@ -763,6 +771,11 @@ private:
     std::vector<pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra, cryptonote::txtype tx_type = cryptonote::txtype::standard);
     std::vector<pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra, cryptonote::txtype tx_type = cryptonote::txtype::standard);
     std::vector<pending_tx> create_transactions_burn(const std::vector<crypto::key_image> &ki, const size_t outputs, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra, cryptonote::txtype tx_type = cryptonote::txtype::coin_burn);
+
+    // Confidential asset lifecycle transactions
+    std::vector<pending_tx> ca_register_asset(const cryptonote::asset_descriptor_base& descriptor, uint32_t subaddr_account, uint32_t priority);
+    std::vector<pending_tx> ca_emit_asset(const crypto::hash& asset_id, uint64_t amount, const crypto::secret_key& owner_skey, uint32_t subaddr_account, uint32_t priority);
+    std::vector<pending_tx> ca_burn_asset(const crypto::hash& asset_id, uint64_t amount, const crypto::secret_key& owner_skey, uint32_t subaddr_account, uint32_t priority);
 
     bool sanity_check(const std::vector<pending_tx> &ptx_vector, std::vector<cryptonote::tx_destination_entry> dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
