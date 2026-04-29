@@ -9552,6 +9552,20 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     {
       ++num_selected_transfers;
       const transfer_details &td = m_transfers[idx];
+
+      // Confidential asset outputs must be mixed only with outputs of the same asset.
+      // The standard BDX RCT output pool cannot be used for CA rings.  Push an
+      // entry containing only the real output (no decoys) and continue; a future
+      // implementation will query a per-asset output set from the daemon.
+      if (td.is_ca())
+      {
+        MWARNING("get_outs: CA output (asset_id=" << string_tools::pod_to_hex(td.m_asset_id)
+                 << ") skipping RCT decoy pool – per-asset decoy selection not yet implemented");
+        outs.emplace_back();
+        outs.back().emplace_back(td.m_global_output_index, td.get_public_key(), rct::identity());
+        continue;
+      }
+
       const uint64_t amount = td.is_rct() ? 0 : td.amount();
       std::unordered_set<uint64_t> seen_indices;
       // request more for rct in base recent (locked) coinbases are picked, since they're locked for longer
