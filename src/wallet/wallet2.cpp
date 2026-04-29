@@ -1933,6 +1933,14 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   }
   const std::vector<tx_extra_field> &tx_extra_fields = tx_cache_data.tx_extra_fields.empty() ? local_tx_extra_fields : tx_cache_data.tx_extra_fields;
 
+  // Extract confidential asset id from tx_extra if present.
+  crypto::hash tx_asset_id = crypto::null_hash;
+  {
+    tx_extra_asset_registration asset_reg;
+    if (find_tx_extra_field_by_type(tx_extra_fields, asset_reg))
+      tx_asset_id = asset_reg.asset_id;
+  }
+
   // Don't try to extract tx public key if tx has no ouputs
   size_t pk_index = 0;
   std::vector<tx_scan_info_t> tx_scan_info(tx.vout.size());
@@ -2064,6 +2072,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
         if (tx_scan_info[i].received)
         {
+          tx_scan_info[i].asset_id = tx_asset_id;
           hwdev.conceal_derivation(tx_scan_info[i].received->derivation, tx_pub_key, additional_tx_pub_keys.data, derivation, additional_derivations);
           scan_output(tx, miner_tx, tx_pub_key, i, tx_scan_info[i], tx_money_got_in_outs, outs, pool, flash);
         }
@@ -2077,6 +2086,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
         if (tx_scan_info[i].received)
         {
+          tx_scan_info[i].asset_id = tx_asset_id;
           hw::device &hwdev = m_account.get_device();
           std::unique_lock hwdev_lock{hwdev};
           hwdev.set_mode(hw::device::mode::NONE);
@@ -2169,6 +2179,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_rct = false;
             }
             td.m_frozen = false;
+            td.m_asset_id = tx_scan_info[o].asset_id;
+            td.m_is_ca    = tx_scan_info[o].is_ca;
 	    set_unspent(m_transfers.size()-1);
             if (td.m_key_image_known)
               m_key_images[td.m_key_image] = m_transfers.size()-1;
