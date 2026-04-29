@@ -1679,16 +1679,29 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
   hw::device &hwdev = m_account.get_device();
   std::unique_lock hwdev_lock{hwdev};
   hwdev.set_mode(hw::device::mode::TRANSACTION_PARSE);
-  if (!std::holds_alternative<txout_to_key>(o.target))
+
+  const crypto::public_key *out_key = nullptr;
+  if (std::holds_alternative<txout_to_key>(o.target))
   {
-     tx_scan_info.error = true;
-     LOG_ERROR("wrong type id in transaction out");
-     return;
+    out_key = &var::get<txout_to_key>(o.target).key;
+    tx_scan_info.is_ca = false;
   }
-  tx_scan_info.received = is_out_to_acc_precomp(m_subaddresses, var::get<txout_to_key>(o.target).key, derivation, additional_derivations, i, hwdev);
+  else if (std::holds_alternative<txout_zarcanum>(o.target))
+  {
+    out_key = &var::get<txout_zarcanum>(o.target).stealth_address;
+    tx_scan_info.is_ca = true;
+  }
+  else
+  {
+    tx_scan_info.error = true;
+    LOG_ERROR("wrong type id in transaction out");
+    return;
+  }
+
+  tx_scan_info.received = is_out_to_acc_precomp(m_subaddresses, *out_key, derivation, additional_derivations, i, hwdev);
   if(tx_scan_info.received)
   {
-    tx_scan_info.money_transfered = o.amount; // may be 0 for ringct outputs
+    tx_scan_info.money_transfered = o.amount; // may be 0 for ringct / CA outputs
   }
   else
   {
