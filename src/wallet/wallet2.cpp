@@ -15365,4 +15365,105 @@ uint64_t wallet2::get_bytes_received() const
 {
   return m_http_client.get_bytes_received() + m_long_poll_client.get_bytes_received();
 }
+//----------------------------------------------------------------------------------------------------
+// Confidential asset lifecycle methods
+//----------------------------------------------------------------------------------------------------
+
+std::vector<wallet2::pending_tx> wallet2::ca_register_asset(
+    const cryptonote::asset_descriptor_base& descriptor,
+    uint32_t subaddr_account,
+    uint32_t priority)
+{
+  // Build tx_extra: REGISTER carries the full descriptor; asset_id is computed here.
+  cryptonote::tx_extra_asset_registration reg{};
+  reg.op_type    = cryptonote::asset_operation_type::REGISTER;
+  reg.descriptor = descriptor;
+  reg.asset_id   = cryptonote::asset_descriptor_id(descriptor);
+  reg.amount     = 0;
+  // No owner_sig required for REGISTER – ownership is encoded in descriptor.owner.
+
+  std::vector<uint8_t> extra;
+  cryptonote::add_tx_extra(extra, reg);
+
+  // Route through standard transfer machinery: no specific destination (change to self).
+  cryptonote::beldex_construct_tx_params tx_params{};
+  tx_params.tx_type = cryptonote::txtype::standard;
+
+  std::vector<cryptonote::tx_destination_entry> dsts; // empty; fee covers cost
+  return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<wallet2::pending_tx> wallet2::ca_emit_asset(
+    const crypto::hash& asset_id,
+    uint64_t amount,
+    const crypto::secret_key& owner_skey,
+    uint32_t subaddr_account,
+    uint32_t priority)
+{
+  // Build the owner signature: Hs(op_type || asset_id || le64(amount))
+  std::array<uint8_t, 1 + 32 + 8> sig_msg;
+  sig_msg[0] = static_cast<uint8_t>(cryptonote::asset_operation_type::EMIT);
+  std::memcpy(sig_msg.data() + 1, asset_id.data, 32);
+  uint64_t le_amount = htole64(amount);
+  std::memcpy(sig_msg.data() + 33, &le_amount, 8);
+  crypto::hash sig_hash;
+  crypto::cn_fast_hash(sig_msg.data(), sig_msg.size(), sig_hash);
+
+  crypto::public_key owner_pkey;
+  crypto::secret_key_to_public_key(owner_skey, owner_pkey);
+  crypto::signature owner_sig;
+  crypto::generate_signature(sig_hash, owner_pkey, owner_skey, owner_sig);
+
+  cryptonote::tx_extra_asset_registration reg{};
+  reg.op_type   = cryptonote::asset_operation_type::EMIT;
+  reg.asset_id  = asset_id;
+  reg.amount    = amount;
+  reg.owner_sig = owner_sig;
+
+  std::vector<uint8_t> extra;
+  cryptonote::add_tx_extra(extra, reg);
+
+  cryptonote::beldex_construct_tx_params tx_params{};
+  tx_params.tx_type = cryptonote::txtype::standard;
+
+  std::vector<cryptonote::tx_destination_entry> dsts;
+  return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<wallet2::pending_tx> wallet2::ca_burn_asset(
+    const crypto::hash& asset_id,
+    uint64_t amount,
+    const crypto::secret_key& owner_skey,
+    uint32_t subaddr_account,
+    uint32_t priority)
+{
+  // Build the owner signature over (op_type || asset_id || le64(amount))
+  std::array<uint8_t, 1 + 32 + 8> sig_msg;
+  sig_msg[0] = static_cast<uint8_t>(cryptonote::asset_operation_type::BURN);
+  std::memcpy(sig_msg.data() + 1, asset_id.data, 32);
+  uint64_t le_amount = htole64(amount);
+  std::memcpy(sig_msg.data() + 33, &le_amount, 8);
+  crypto::hash sig_hash;
+  crypto::cn_fast_hash(sig_msg.data(), sig_msg.size(), sig_hash);
+
+  crypto::public_key owner_pkey;
+  crypto::secret_key_to_public_key(owner_skey, owner_pkey);
+  crypto::signature owner_sig;
+  crypto::generate_signature(sig_hash, owner_pkey, owner_skey, owner_sig);
+
+  cryptonote::tx_extra_asset_registration reg{};
+  reg.op_type   = cryptonote::asset_operation_type::BURN;
+  reg.asset_id  = asset_id;
+  reg.amount    = amount;
+  reg.owner_sig = owner_sig;
+
+  std::vector<uint8_t> extra;
+  cryptonote::add_tx_extra(extra, reg);
+
+  cryptonote::beldex_construct_tx_params tx_params{};
+  tx_params.tx_type = cryptonote::txtype::standard;
+
+  std::vector<cryptonote::tx_destination_entry> dsts;
+  return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);
+}
 }
