@@ -1792,25 +1792,48 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
     }
   }
 
+  const bool is_ca_out = tx_scan_info.is_ca;
+  const crypto::public_key &out_key = is_ca_out
+      ? var::get<cryptonote::txout_zarcanum>(tx.vout[vout_index].target).stealth_address
+      : var::get<cryptonote::txout_to_key>(tx.vout[vout_index].target).key;
+
   if (m_multisig)
   {
-    tx_scan_info.in_ephemeral.pub = var::get<cryptonote::txout_to_key>(tx.vout[vout_index].target).key;
+    tx_scan_info.in_ephemeral.pub = out_key;
     tx_scan_info.in_ephemeral.sec = crypto::null_skey;
     tx_scan_info.ki = rct::rct2ki(rct::zero());
   }
   else
   {
-    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), var::get<cryptonote::txout_to_key>(tx.vout[vout_index].target).key, tx_scan_info.received->derivation, vout_index, tx_scan_info.received->index, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
+    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), out_key, tx_scan_info.received->derivation, vout_index, tx_scan_info.received->index, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
     THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
-    THROW_WALLET_EXCEPTION_IF(tx_scan_info.in_ephemeral.pub != var::get<cryptonote::txout_to_key>(tx.vout[vout_index].target).key,
+    THROW_WALLET_EXCEPTION_IF(tx_scan_info.in_ephemeral.pub != out_key,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
   }
 
   THROW_WALLET_EXCEPTION_IF(std::find(outs.begin(), outs.end(), vout_index) != outs.end(), error::wallet_internal_error, "Same output cannot be added twice");
   if (tx_scan_info.money_transfered == 0 && !miner_tx)
   {
-    tx_scan_info.money_transfered = tools::decodeRct(tx.rct_signatures, tx_scan_info.received->derivation, vout_index, tx_scan_info.mask, m_account.get_device());
+    if (is_ca_out)
+    {
+      // Decrypt the CA output amount: amount = encrypted_amount XOR trunc64(Hs(h||i))
+      // where h = derivation_to_scalar(derivation, vout_index).
+      const auto& ca_out = var::get<cryptonote::txout_zarcanum>(tx.vout[vout_index].target);
+      crypto::secret_key h_scalar;
+      m_account.get_device().derivation_to_scalar(tx_scan_info.received->derivation, vout_index, h_scalar);
+      crypto::hash amount_mask;
+      crypto::cn_fast_hash(h_scalar.data, sizeof(h_scalar.data), amount_mask);
+      uint64_t mask64;
+      std::memcpy(&mask64, amount_mask.data, sizeof(mask64));
+      tx_scan_info.money_transfered = ca_out.encrypted_amount ^ mask64;
+      tx_scan_info.mask = rct::identity(); // CA outputs use commitment-based mask
+    }
+    else
+    {
+      tx_scan_info.money_transfered = tools::decodeRct(tx.rct_signatures, tx_scan_info.received->derivation, vout_index, tx_scan_info.mask, m_account.get_device());
+    }
   }
+  // Propagate asset_id from tx_scan_info (populated by process_new_transaction from tx_extra).
 
   if (tx_scan_info.money_transfered == 0)
   {
