@@ -6194,6 +6194,43 @@ uint64_t wallet2::unlocked_balance_all(bool strict, uint64_t *blocks_to_unlock, 
   return r;
 }
 //----------------------------------------------------------------------------------------------------
+uint64_t wallet2::balance_asset(const crypto::hash& asset_id, uint32_t index_major, bool strict) const
+{
+  uint64_t amount = 0;
+  for (const auto& td: m_transfers)
+  {
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen
+        && td.m_asset_id == asset_id)
+      amount += td.amount();
+  }
+  return amount;
+}
+//----------------------------------------------------------------------------------------------------
+std::map<uint32_t, uint64_t> wallet2::balance_asset_per_subaddress(const crypto::hash& asset_id, uint32_t index_major, bool strict) const
+{
+  std::map<uint32_t, uint64_t> amount_per_subaddr;
+  for (const auto& td: m_transfers)
+  {
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen
+        && td.m_asset_id == asset_id)
+    {
+      amount_per_subaddr[td.m_subaddr_index.minor] += td.amount();
+    }
+  }
+  return amount_per_subaddr;
+}
+//----------------------------------------------------------------------------------------------------
+std::map<crypto::hash, uint64_t> wallet2::all_asset_balances(uint32_t index_major, bool strict) const
+{
+  std::map<crypto::hash, uint64_t> balances;
+  for (const auto& td: m_transfers)
+  {
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
+      balances[td.m_asset_id] += td.amount();
+  }
+  return balances;
+}
+//----------------------------------------------------------------------------------------------------
 void wallet2::get_transfers(wallet2::transfer_container& incoming_transfers) const
 {
   incoming_transfers = m_transfers;
