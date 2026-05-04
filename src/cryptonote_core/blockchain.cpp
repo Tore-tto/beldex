@@ -3329,7 +3329,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   if (tx.is_transfer())
   {
-    if (tx.type != txtype::beldex_name_system && tx.type != txtype::coin_burn && hf_version >= feature::MIN_2_OUTPUTS && tx.vout.size() < 2)
+    if (tx.type != txtype::beldex_name_system && tx.type != txtype::coin_burn && tx.type != txtype::confidential_asset && hf_version >= feature::MIN_2_OUTPUTS && tx.vout.size() < 2)
     {
       MERROR_VER("Tx " << get_transaction_hash(tx) << " has fewer than two outputs, which is not allowed as of hardfork " << static_cast<int>(feature::MIN_2_OUTPUTS));
       tvc.m_too_few_outputs = true;

@@ -9559,7 +9559,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       // implementation will query a per-asset output set from the daemon.
       if (td.is_ca())
       {
-        MWARNING("get_outs: CA output (asset_id=" << string_tools::pod_to_hex(td.m_asset_id)
+        MWARNING("get_outs: CA output (asset_id=" << tools::type_to_hex(td.m_asset_id)
                  << ") skipping RCT decoy pool – per-asset decoy selection not yet implemented");
         outs.emplace_back();
         outs.back().emplace_back(td.m_global_output_index, td.get_public_key(), rct::identity());
@@ -11015,17 +11015,18 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
 
 
   bool const is_bns_tx = (tx_params.tx_type == txtype::beldex_name_system);
-    LOG_PRINT_L0("is_bns_tx:" << is_bns_tx);
+  bool const is_burn_tx = (tx_params.tx_type == txtype::coin_burn);
+  bool const is_ca_tx = (tx_params.tx_type == txtype::confidential_asset);
+    LOG_PRINT_L0("is_bns_tx:" << is_bns_tx << " is_burn_tx:" << is_burn_tx << " is_ca_tx:" << is_ca_tx);
   auto original_dsts = dsts;
-  if (is_bns_tx)
+  if (is_bns_tx || is_ca_tx)
   {
-    THROW_WALLET_EXCEPTION_IF(dsts.size() != 0, error::wallet_internal_error, "beldex name system txs must not have any destinations set, has: " + std::to_string(dsts.size()));
+    if (is_bns_tx)
+      THROW_WALLET_EXCEPTION_IF(dsts.size() != 0, error::wallet_internal_error, "beldex name system txs must not have any destinations set, has: " + std::to_string(dsts.size()));
     dsts.emplace_back(0, account_public_address{} /*address*/, false /*is_subaddress*/); // NOTE: Create a dummy dest that gets repurposed into the change output.
   }
 
   // check the type is burn or not
-  bool const is_burn_tx = (tx_params.tx_type == txtype::coin_burn);
-    LOG_PRINT_L0("is_burn_tx:" << is_burn_tx);  
   if (is_burn_tx)
   {
     THROW_WALLET_EXCEPTION_IF(dsts.size() != 0, error::wallet_internal_error, "Burn txs must not have any destinations set, has: " + std::to_string(dsts.size()));
@@ -11182,7 +11183,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   needed_money = 0;
   for(auto& dt: dsts)
   {
-    THROW_WALLET_EXCEPTION_IF(0 == dt.amount && !(is_bns_tx || is_burn_tx), error::zero_destination);
+    THROW_WALLET_EXCEPTION_IF(0 == dt.amount && !(is_bns_tx || is_burn_tx || is_ca_tx), error::zero_destination);
     needed_money += dt.amount;
     LOG_PRINT_L2("transfer: adding " << print_money(dt.amount) << ", for a total of " << print_money (needed_money));
     THROW_WALLET_EXCEPTION_IF(needed_money < dt.amount, error::tx_sum_overflow, dsts, 0, m_nettype);
@@ -11190,7 +11191,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
 
 
   // throw if attempting a transaction with no money
-  THROW_WALLET_EXCEPTION_IF(needed_money == 0 && !(is_bns_tx || is_burn_tx), error::zero_destination);
+  THROW_WALLET_EXCEPTION_IF(needed_money == 0 && !(is_bns_tx || is_burn_tx || is_ca_tx), error::zero_destination);
 
   std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> unlocked_balance_per_subaddr = unlocked_balance_per_subaddress(subaddr_account, false);
   std::map<uint32_t, uint64_t> balance_per_subaddr = balance_per_subaddress(subaddr_account, false);
@@ -11385,7 +11386,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       idx = pop_back(preferred_inputs);
       pop_if_present(*unused_transfers_indices, idx);
       pop_if_present(*unused_dust_indices, idx);
-    } else if ((dsts.empty() || (dsts[0].amount == 0 && !(is_bns_tx || is_burn_tx))) && !adding_fee) {
+    } else if ((dsts.empty() || (dsts[0].amount == 0 && !(is_bns_tx || is_burn_tx || is_ca_tx))) && !adding_fee) {
       // NOTE: A BNS tx sets dsts[0].amount to 0, but this branch is for the
       // 2 inputs/2 outputs. We only have 1 output as BNS transactions are
       // distinguishable, so we actually want the last branch which uses unused
@@ -15383,11 +15384,11 @@ std::vector<wallet2::pending_tx> wallet2::ca_register_asset(
   // No owner_sig required for REGISTER – ownership is encoded in descriptor.owner.
 
   std::vector<uint8_t> extra;
-  cryptonote::add_tx_extra(extra, reg);
+  cryptonote::add_tx_extra_field_to_tx_extra(extra, reg);
 
   // Route through standard transfer machinery: no specific destination (change to self).
   cryptonote::beldex_construct_tx_params tx_params{};
-  tx_params.tx_type = cryptonote::txtype::standard;
+  tx_params.tx_type = cryptonote::txtype::confidential_asset;
 
   std::vector<cryptonote::tx_destination_entry> dsts; // empty; fee covers cost
   return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);
@@ -15421,10 +15422,10 @@ std::vector<wallet2::pending_tx> wallet2::ca_emit_asset(
   reg.owner_sig = owner_sig;
 
   std::vector<uint8_t> extra;
-  cryptonote::add_tx_extra(extra, reg);
+  cryptonote::add_tx_extra_field_to_tx_extra(extra, reg);
 
   cryptonote::beldex_construct_tx_params tx_params{};
-  tx_params.tx_type = cryptonote::txtype::standard;
+  tx_params.tx_type = cryptonote::txtype::confidential_asset;
 
   std::vector<cryptonote::tx_destination_entry> dsts;
   return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);
@@ -15458,10 +15459,10 @@ std::vector<wallet2::pending_tx> wallet2::ca_burn_asset(
   reg.owner_sig = owner_sig;
 
   std::vector<uint8_t> extra;
-  cryptonote::add_tx_extra(extra, reg);
+  cryptonote::add_tx_extra_field_to_tx_extra(extra, reg);
 
   cryptonote::beldex_construct_tx_params tx_params{};
-  tx_params.tx_type = cryptonote::txtype::standard;
+  tx_params.tx_type = cryptonote::txtype::confidential_asset;
 
   std::vector<cryptonote::tx_destination_entry> dsts;
   return create_transactions_2(dsts, cryptonote::TX_OUTPUT_DECOYS, 0, priority, extra, subaddr_account, {}, tx_params);

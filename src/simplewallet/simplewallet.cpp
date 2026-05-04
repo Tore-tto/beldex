@@ -62,6 +62,7 @@
 #include "common/signal_handler.h"
 #include "common/base58.h"
 #include "common/scoped_message_writer.h"
+#include "common/hex.h"
 #include "common/beldex_integration_test_hooks.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "cryptonote_core/master_node_voting.h"
@@ -266,6 +267,11 @@ namespace
   const char* USAGE_BNS_LOOKUP("bns_lookup <name> [<name> ...]");
     
   const char* USAGE_COIN_BURN("coin_burn [index=<N1>[,<N2>,...]] [<priority>] <burn=amount | txid>");
+
+  const char* USAGE_CA_REGISTER_ASSET("ca_register_asset [flash|unimportant] <full_name> <ticker> <decimal_point> <total_max_supply> <owner_address>");
+  const char* USAGE_CA_EMIT_ASSET("ca_emit_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+  const char* USAGE_CA_BURN_ASSET("ca_burn_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+  const char* USAGE_CA_GET_BALANCES("ca_get_balances");
 
 
 #if defined (BELDEX_ENABLE_INTEGRATION_TEST_HOOKS)
@@ -3102,10 +3108,13 @@ Pending or Failed: "failed"|"pending",  "out", Lock, Checkpointed, Time, Amount*
                            [this](const auto& x) { return welcome(x); },
                            tr(USAGE_WELCOME),
                            tr("Display the welcome message for the wallet"));
-  m_cmd_binder.set_handler("version",
-                           [this](const auto& x) { return version(x); },
-                           tr(USAGE_VERSION),
-                           tr("Returns version information"));
+  m_cmd_binder.set_handler("version", [this](const auto& x) { return version(x); }, USAGE_VERSION, tr("Show wallet version"));
+
+  m_cmd_binder.set_handler("ca_register_asset", [this](const auto& x) { return ca_register_asset(x); }, USAGE_CA_REGISTER_ASSET, tr("Register a new Confidential Asset"));
+  m_cmd_binder.set_handler("ca_emit_asset", [this](const auto& x) { return ca_emit_asset(x); }, USAGE_CA_EMIT_ASSET, tr("Emit (mint) Confidential Asset units"));
+  m_cmd_binder.set_handler("ca_burn_asset", [this](const auto& x) { return ca_burn_asset(x); }, USAGE_CA_BURN_ASSET, tr("Burn (destroy) Confidential Asset units"));
+  m_cmd_binder.set_handler("ca_get_balances", [this](const auto& x) { return ca_get_balances(x); }, USAGE_CA_GET_BALANCES, tr("Show all asset balances"));
+
   m_cmd_binder.set_handler("help",
                            [this](const auto& x) { return help(x); },
                            tr(USAGE_HELP),
@@ -9372,6 +9381,167 @@ bool simple_wallet::check_mms()
       check_for_messages();
     }
     return true;
+}
+//----------------------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::ca_get_balances(const std::vector<std::string> &args)
+{
+  if (!args.empty())
+  {
+    fail_msg_writer() << tr("usage: ca_get_balances");
+    return true;
+  }
+
+  std::map<crypto::hash, uint64_t> balances = m_wallet->all_asset_balances(m_current_subaddress_account, false);
+  if (balances.empty())
+  {
+    success_msg_writer() << tr("No assets found in this account.");
+    return true;
+  }
+
+  success_msg_writer() << tr("Confidential Asset Balances:");
+  for (const auto& [asset_id, amount] : balances)
+  {
+    if (asset_id == crypto::null_hash)
+    {
+      success_msg_writer() << "  BDX: " << print_money(amount);
+    }
+    else
+    {
+      success_msg_writer() << "  Asset " << tools::type_to_hex(asset_id) << ": " << amount;
+    }
+  }
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::ca_register_asset(const std::vector<std::string> &args)
+{
+  uint32_t priority = 0;
+  std::vector<std::string> local_args = args;
+  if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
+    local_args.erase(local_args.begin());
+
+  if (local_args.size() != 5)
+  {
+    fail_msg_writer() << tr("usage: ca_register_asset [flash|unimportant] <full_name> <ticker> <decimal_point> <total_max_supply> <owner_address>");
+    return true;
+  }
+
+  if (priority == 0) priority = 1; // Default to unimportant for CA if not specified
+
+  cryptonote::asset_descriptor_base descriptor{};
+  descriptor.full_name     = local_args[0];
+  descriptor.ticker        = local_args[1];
+  descriptor.decimal_point = std::stoi(local_args[2]);
+  descriptor.total_max_supply = std::stoull(local_args[3]);
+
+  cryptonote::address_parse_info owner_addr;
+  if (!cryptonote::get_account_address_from_str(owner_addr, m_wallet->nettype(), local_args[4]))
+  {
+    fail_msg_writer() << tr("Invalid owner address");
+    return true;
+  }
+  descriptor.owner = owner_addr.address.m_spend_public_key;
+
+  try
+  {
+    std::vector<tools::wallet2::pending_tx> ptx = m_wallet->ca_register_asset(descriptor, m_current_subaddress_account, priority);
+    commit_or_save(ptx, m_do_not_relay, priority == 5);
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("Failed to register asset: ") << e.what();
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::ca_emit_asset(const std::vector<std::string> &args)
+{
+  uint32_t priority = 0;
+  std::vector<std::string> local_args = args;
+  if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
+    local_args.erase(local_args.begin());
+
+  if (local_args.size() != 3)
+  {
+    fail_msg_writer() << tr("usage: ca_emit_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+    return true;
+  }
+
+  if (priority == 0) priority = 1;
+
+  crypto::hash asset_id;
+  if (!tools::hex_to_type(local_args[0], asset_id))
+  {
+    fail_msg_writer() << tr("Invalid asset_id");
+    return true;
+  }
+
+  uint64_t amount = std::stoull(local_args[1]);
+
+  crypto::secret_key owner_skey;
+  if (!tools::hex_to_type(local_args[2], owner_skey))
+  {
+    fail_msg_writer() << tr("Invalid owner secret key");
+    return true;
+  }
+
+  try
+  {
+    std::vector<tools::wallet2::pending_tx> ptx = m_wallet->ca_emit_asset(asset_id, amount, owner_skey, m_current_subaddress_account, priority);
+    commit_or_save(ptx, m_do_not_relay, priority == 5);
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("Failed to emit asset: ") << e.what();
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::ca_burn_asset(const std::vector<std::string> &args)
+{
+  uint32_t priority = 0;
+  std::vector<std::string> local_args = args;
+  if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
+    local_args.erase(local_args.begin());
+
+  if (local_args.size() != 3)
+  {
+    fail_msg_writer() << tr("usage: ca_burn_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+    return true;
+  }
+
+  if (priority == 0) priority = 1;
+
+  crypto::hash asset_id;
+  if (!tools::hex_to_type(local_args[0], asset_id))
+  {
+    fail_msg_writer() << tr("Invalid asset_id");
+    return true;
+  }
+
+  uint64_t amount = std::stoull(local_args[1]);
+
+  crypto::secret_key owner_skey;
+  if (!tools::hex_to_type(local_args[2], owner_skey))
+  {
+    fail_msg_writer() << tr("Invalid owner secret key");
+    return true;
+  }
+
+  try
+  {
+    std::vector<tools::wallet2::pending_tx> ptx = m_wallet->ca_burn_asset(asset_id, amount, owner_skey, m_current_subaddress_account, priority);
+    commit_or_save(ptx, m_do_not_relay, priority == 5);
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("Failed to burn asset: ") << e.what();
+  }
+
+  return true;
 }
 //----------------------------------------------------------------------------------------------------
 std::string simple_wallet::get_prompt() const

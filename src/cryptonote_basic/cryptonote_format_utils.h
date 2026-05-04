@@ -118,6 +118,15 @@ namespace cryptonote
   bool parse_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<tx_extra_field>& tx_extra_fields);
   bool sort_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<uint8_t>& sorted_tx_extra);
 
+  bool add_tx_extra_field_to_tx_extra(std::vector<uint8_t>& tx_extra, tx_extra_field& field);
+
+  template <typename T>
+  bool add_tx_extra_field_to_tx_extra(std::vector<uint8_t>& tx_extra, const T& val)
+  {
+    tx_extra_field field = val;
+    return add_tx_extra_field_to_tx_extra(tx_extra, field);
+  }
+
   template <typename T>
   bool get_field_from_tx_extra(const std::vector<uint8_t>& tx_extra, T& field, size_t skip = 0)
   {

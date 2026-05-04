@@ -110,6 +110,17 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txout_zarcanum &x, const boost::serialization::version_type ver)
+  {
+    a & x.stealth_address;
+    a & x.concealing_point;
+    a & x.amount_commitment;
+    a & x.blinded_asset_id;
+    a & x.encrypted_amount;
+    a & x.mix_attr;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, cryptonote::txin_gen &x, const boost::serialization::version_type ver)
   {
     a & x.height;
@@ -341,12 +352,29 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, rct::ca_balance_proof &x, const boost::serialization::version_type ver)
+  {
+    a & x.c;
+    a & x.y0;
+    a & x.y1;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, rct::ca_UG_aggregation_proof &x, const boost::serialization::version_type ver)
+  {
+    a & x.E_prime;
+    a & x.c;
+    a & x.y0s;
+    a & x.y1s;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, rct::rctSigBase &x, const boost::serialization::version_type ver)
   {
     a & x.type;
     if (x.type == rct::RCTType::Null)
       return;
-    if (!tools::equals_any(x.type, rct::RCTType::Full, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus))
+    if (!tools::equals_any(x.type, rct::RCTType::Full, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus, rct::RCTType::ConfidentialAssets))
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     // a & x.message; message is not serialized, as it can be reconstructed from the tx data
     // a & x.mixRing; mixRing is not serialized, as it can be reconstructed from the offsets
@@ -355,6 +383,11 @@ namespace boost
     a & x.ecdhInfo;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
+    if (x.type == rct::RCTType::ConfidentialAssets)
+    {
+      a & x.pseudo_out_asset_tags;
+      a & x.out_asset_tags;
+    }
   }
 
   template <class Archive>
@@ -372,6 +405,11 @@ namespace boost
       a & x.CLSAGs;
     if (x.rangeSigs.empty())
       a & x.pseudoOuts;
+    if (ver >= 3u)
+    {
+      a & x.ca_balance;
+      a & x.ca_ug_proof;
+    }
   }
 
   template <class Archive>
@@ -380,7 +418,7 @@ namespace boost
     a & x.type;
     if (x.type == rct::RCTType::Null)
       return;
-    if (!tools::equals_any(x.type, rct::RCTType::Full, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus))
+    if (!tools::equals_any(x.type, rct::RCTType::Full, rct::RCTType::Simple, rct::RCTType::Bulletproof, rct::RCTType::Bulletproof2, rct::RCTType::CLSAG, rct::RCTType::BulletproofPlus, rct::RCTType::ConfidentialAssets))
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     // a & x.message; message is not serialized, as it can be reconstructed from the tx data
     // a & x.mixRing; mixRing is not serialized, as it can be reconstructed from the offsets
@@ -389,6 +427,11 @@ namespace boost
     a & x.ecdhInfo;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
+    if (x.type == rct::RCTType::ConfidentialAssets)
+    {
+      a & x.pseudo_out_asset_tags;
+      a & x.out_asset_tags;
+    }
     //--------------
     a & x.p.rangeSigs;
     if (x.p.rangeSigs.empty())
@@ -400,8 +443,13 @@ namespace boost
     a & x.p.MGs;
     if (ver >= 1u)
       a & x.p.CLSAGs;
-    if (x.type == rct::RCTType::Bulletproof || x.type == rct::RCTType::Bulletproof2 || x.type == rct::RCTType::CLSAG || x.type == rct::RCTType::BulletproofPlus)
+    if (x.type == rct::RCTType::Bulletproof || x.type == rct::RCTType::Bulletproof2 || x.type == rct::RCTType::CLSAG || x.type == rct::RCTType::BulletproofPlus || x.type == rct::RCTType::ConfidentialAssets)
       a & x.p.pseudoOuts;
+    if (ver >= 3u)
+    {
+      a & x.p.ca_balance;
+      a & x.p.ca_ug_proof;
+    }
   }
 
   template <class Archive>
@@ -413,6 +461,6 @@ namespace boost
 }
 }
 
-BOOST_CLASS_VERSION(rct::rctSigPrunable, 2)
-BOOST_CLASS_VERSION(rct::rctSig, 2)
+BOOST_CLASS_VERSION(rct::rctSigPrunable, 3)
+BOOST_CLASS_VERSION(rct::rctSig, 3)
 BOOST_CLASS_VERSION(rct::multisig_out, 1)

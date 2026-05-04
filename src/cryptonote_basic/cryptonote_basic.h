@@ -212,7 +212,7 @@ namespace cryptonote
     txversion version;
     txtype type;
 
-    bool is_transfer() const { return type == txtype::standard || type == txtype::stake || type == txtype::beldex_name_system || type == txtype::coin_burn; }
+    bool is_transfer() const { return type == txtype::standard || type == txtype::stake || type == txtype::beldex_name_system || type == txtype::coin_burn || type == txtype::confidential_asset; }
 
     // not used after version 2, but remains for compatibility
     uint64_t unlock_time;  //number of block (or time), used as a limitation like: spend this tx not early then block/time
@@ -568,6 +568,8 @@ namespace cryptonote
     else if (hf_version >= hf::hf11_infinite_staking) result = txtype::key_image_unlock;
     else if (hf_version >= hf::hf9_master_nodes)      result = txtype::state_change;
 
+    if (hf_version >= hf::hf19_enhance_bns) result = txtype::confidential_asset;
+
     return result;
   }
 
@@ -593,6 +595,7 @@ namespace cryptonote
       case txtype::stake:                   return "stake";
       case txtype::beldex_name_system:      return "beldex_name_system";
       case txtype::coin_burn:               return "coin_burn";
+      case txtype::confidential_asset:      return "confidential_asset";
       default: assert(false);               return "xx_unhandled_type";
     }
   }

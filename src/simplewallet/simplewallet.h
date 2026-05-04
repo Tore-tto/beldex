@@ -286,6 +286,11 @@ namespace cryptonote
     bool welcome(const std::vector<std::string>& args);
     bool version(const std::vector<std::string>& args);
 
+    bool ca_register_asset(const std::vector<std::string> &args);
+    bool ca_emit_asset(const std::vector<std::string> &args);
+    bool ca_burn_asset(const std::vector<std::string> &args);
+    bool ca_get_balances(const std::vector<std::string> &args);
+
     bool register_master_node_main(
         const std::vector<std::string>& master_node_key_as_str,
         const cryptonote::account_public_address& address,

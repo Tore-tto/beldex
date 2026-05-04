@@ -815,6 +815,14 @@ namespace cryptonote::rpc {
         set("bns", std::move(bns));
     }
 
+      void operator()(const tx_extra_asset_registration& x) {
+        json b{};
+        b["asset_id"] = tools::type_to_hex(x.asset_id);
+        b["op_type"] = static_cast<uint8_t>(x.op_type);
+        b["amount"] = x.amount;
+        set("asset_registration", std::move(b));
+      }
+
       // Ignore these fields:
       void operator()(const tx_extra_padding&) {}
       void operator()(const tx_extra_mysterious_minergate&) {}
