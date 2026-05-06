@@ -421,6 +421,46 @@ namespace cryptonote
         }
       }
 
+      if (!(in_ephemeral.pub == out_key))
+      {
+        LOG_ERROR("Key image derivation mismatch!");
+        crypto::public_key spend_pub_recomp;
+        hwdev.secret_key_to_public_key(ack.m_spend_secret_key, spend_pub_recomp);
+        LOG_ERROR("  Wallet Spend Pub:  " << ack.m_account_address.m_spend_public_key);
+        LOG_ERROR("  Recomputed Pub:    " << spend_pub_recomp);
+        if (!(spend_pub_recomp == ack.m_account_address.m_spend_public_key))
+        {
+           LOG_ERROR("  CRITICAL: Spend Secret Key does NOT match Spend Public Key!");
+           bool is_zero = true;
+           for (size_t i=0; i<32; ++i) if (ack.m_spend_secret_key.data[i] != 0) is_zero = false;
+           if (is_zero) LOG_ERROR("  REASON: Spend Secret Key is ALL ZEROS (Watch-only?)");
+        }
+
+        crypto::public_key view_pub_recomp;
+        hwdev.secret_key_to_public_key(ack.m_view_secret_key, view_pub_recomp);
+        if (!(view_pub_recomp == ack.m_account_address.m_view_public_key))
+        {
+           LOG_ERROR("  CRITICAL: View Secret Key also mismatched!");
+           LOG_ERROR("    View Recomputed: " << view_pub_recomp);
+           LOG_ERROR("    View Expected:   " << ack.m_account_address.m_view_public_key);
+        }
+
+        LOG_ERROR("  Output Index in TX: " << real_output_index);
+        LOG_ERROR("  Recv Derivation: " << recv_derivation);
+        LOG_ERROR("  Expected PubKey: " << out_key);
+        LOG_ERROR("  Derived PubKey:  " << in_ephemeral.pub);
+        LOG_ERROR("  Subaddress Idx:  " << received_index.major << "." << received_index.minor);
+
+        // Probing: try index 0 to see if it's a simple index mismatch
+        if (real_output_index != 0)
+        {
+           crypto::public_key probe_pub;
+           crypto::secret_key probe_sec;
+           hwdev.derive_secret_key(recv_derivation, 0, ack.m_spend_secret_key, probe_sec);
+           hwdev.secret_key_to_public_key(probe_sec, probe_pub);
+           LOG_ERROR("  Probing Index 0: " << (probe_pub == out_key ? "MATCH!" : "No match") << " (" << probe_pub << ")");
+        }
+      }
       CHECK_AND_ASSERT_MES(in_ephemeral.pub == out_key,
            false, "key image helper precomp: given output pubkey doesn't match the derived one");
     }
@@ -1047,16 +1087,26 @@ namespace cryptonote
 
     for(const tx_out& out: tx.vout)
     {
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(out.target), false, "wrong variant type: "
-        << tools::type_name(tools::variant_type(out.target)) << ", expected " << tools::type_name<txout_to_key>()
-        << ", in transaction id=" << get_transaction_hash(tx));
+      crypto::public_key out_key;
+      if (auto tk = std::get_if<txout_to_key>(&out.target))
+        out_key = tk->key;
+      else if (auto zout = std::get_if<txout_zarcanum>(&out.target))
+        out_key = zout->stealth_address;
+      else
+      {
+        LOG_PRINT_L1("wrong variant type: "
+          << tools::type_name(tools::variant_type(out.target)) << ", expected " << tools::type_name<txout_to_key>()
+          << " or " << tools::type_name<txout_zarcanum>()
+          << ", in transaction id=" << get_transaction_hash(tx));
+        return false;
+      }
 
       if (tx.version == txversion::v1)
       {
         CHECK_AND_NO_ASSERT_MES(0 < out.amount, false, "zero amount output in transaction id=" << get_transaction_hash(tx));
       }
 
-      if(!check_key(var::get<txout_to_key>(out.target).key))
+      if(!check_key(out_key))
         return false;
     }
     return true;
@@ -1105,7 +1155,7 @@ namespace cryptonote
     return oxenc::to_hex(tools::view_guts(h).substr(0, 4)) + "....";
   }
   //---------------------------------------------------------------
-  bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index)
+  bool is_out_to_acc(const account_keys& acc, const crypto::public_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index)
   {
     crypto::key_derivation derivation;
     bool r = acc.get_device().generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation);
@@ -1113,7 +1163,7 @@ namespace cryptonote
     crypto::public_key pk;
     r = acc.get_device().derive_public_key(derivation, output_index, acc.m_account_address.m_spend_public_key, pk);
     CHECK_AND_ASSERT_MES(r, false, "Failed to derive public key");
-    if (pk == out_key.key)
+    if (pk == out_key)
       return true;
     // try additional tx pubkeys if available
     if (!additional_tx_pub_keys.empty())
@@ -1123,7 +1173,7 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(r, false, "Failed to generate key derivation");
       r = acc.get_device().derive_public_key(derivation, output_index, acc.m_account_address.m_spend_public_key, pk);
       CHECK_AND_ASSERT_MES(r, false, "Failed to derive public key");
-      return pk == out_key.key;
+      return pk == out_key;
     }
     return false;
   }
@@ -1135,7 +1185,10 @@ namespace cryptonote
     hwdev.derive_subaddress_public_key(out_key, derivation, output_index, subaddress_spendkey);
     auto found = subaddresses.find(subaddress_spendkey);
     if (found != subaddresses.end())
+    {
+      LOG_PRINT_L1("is_out_to_acc_precomp matched with primary/shared derivation at index " << output_index);
       return subaddress_receive_info{ found->second, derivation };
+    }
     // try additional tx pubkeys if available
     if (!additional_derivations.empty())
     {
@@ -1164,8 +1217,18 @@ namespace cryptonote
     size_t i = 0;
     for(const tx_out& o:  tx.vout)
     {
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(o.target), false, "wrong type id in transaction out" );
-      if(is_out_to_acc(acc, var::get<txout_to_key>(o.target), tx_pub_key, additional_tx_pub_keys, i))
+      crypto::public_key out_key;
+      if (auto tk = std::get_if<txout_to_key>(&o.target))
+        out_key = tk->key;
+      else if (auto zout = std::get_if<txout_zarcanum>(&o.target))
+        out_key = zout->stealth_address;
+      else
+      {
+        LOG_ERROR("wrong type id in transaction out");
+        return false;
+      }
+
+      if(is_out_to_acc(acc, out_key, tx_pub_key, additional_tx_pub_keys, i))
       {
         outs.push_back(i);
         money_transfered += o.amount;

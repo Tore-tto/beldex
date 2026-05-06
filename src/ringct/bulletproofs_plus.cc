@@ -183,7 +183,7 @@ namespace rct
     }
 
     // Helper function used to compute the L and R terms used in the inner-product round function
-    static rct::key compute_LR(size_t size, const rct::key &y, const std::vector<ge_p3> &G, size_t G0, const std::vector<ge_p3> &H, size_t H0, const rct::keyV &a, size_t a0, const rct::keyV &b, size_t b0, const rct::key &c, const rct::key &d)
+    static rct::key compute_LR(size_t size, const rct::key &y, const std::vector<ge_p3> &G, size_t G0, const std::vector<ge_p3> &H, size_t H0, const rct::keyV &a, size_t a0, const rct::keyV &b, size_t b0, const rct::key &c, const rct::key &d, const rct::key &h_key)
     {
         CHECK_AND_ASSERT_THROW_MES(size + G0 <= G.size(), "Incompatible size for G");
         CHECK_AND_ASSERT_THROW_MES(size + H0 <= H.size(), "Incompatible size for H");
@@ -205,9 +205,9 @@ namespace rct
         }
 
         sc_mul(multiexp_data[2*size].scalar.bytes, c.bytes, INV_EIGHT.bytes);
-        ge_p3 H_p3;
-        ge_frombytes_vartime(&H_p3, rct::H.bytes);
-        multiexp_data[2*size].point = H_p3;
+        ge_p3 h_p3;
+        ge_frombytes_vartime(&h_p3, h_key.bytes);
+        multiexp_data[2*size].point = h_p3;
 
         sc_mul(multiexp_data[2*size+1].scalar.bytes, d.bytes, INV_EIGHT.bytes);
         ge_p3 G_p3;
@@ -512,7 +512,7 @@ namespace rct
     }
 
     // Given a set of values v [0..2**N) and masks gamma, construct a range proof
-    BulletproofPlus bulletproof_plus_PROVE(const rct::keyV &sv, const rct::keyV &gamma)
+    static BulletproofPlus bulletproof_plus_PROVE_impl(const rct::keyV &sv, const rct::keyV &gamma, const rct::key &h_key)
     {
         // Sanity check on inputs
         CHECK_AND_ASSERT_THROW_MES(sv.size() == gamma.size(), "Incompatible sizes of sv and gamma");
@@ -555,7 +555,7 @@ namespace rct
             rct::key gamma8, sv8;
             sc_mul(gamma8.bytes, gamma[i].bytes, INV_EIGHT.bytes);
             sc_mul(sv8.bytes, sv[i].bytes, INV_EIGHT.bytes);
-            rct::addKeys2(V[i], gamma8, sv8, rct::H);
+            rct::addKeys2(V[i], gamma8, sv8, h_key);
         }
 
         // Decompose values
@@ -685,8 +685,8 @@ try_again:
             rct::key dL = rct::skGen();
             rct::key dR = rct::skGen();
 
-            L[round] = compute_LR(nprime, yinvpow[nprime], Gprime, nprime, Hprime, 0, aprime, 0, bprime, nprime, cL, dL);
-            R[round] = compute_LR(nprime, y_powers[nprime], Gprime, 0, Hprime, nprime, aprime, nprime, bprime, 0, cR, dR);
+            L[round] = compute_LR(nprime, yinvpow[nprime], Gprime, nprime, Hprime, 0, aprime, 0, bprime, nprime, cL, dL, h_key);
+            R[round] = compute_LR(nprime, y_powers[nprime], Gprime, 0, Hprime, nprime, aprime, nprime, bprime, 0, cR, dR, h_key);
 
             const rct::key challenge = transcript_update(transcript, L[round], R[round]);
             if (challenge == rct::zero())
@@ -742,9 +742,9 @@ try_again:
         sc_mul(temp2.bytes, temp2.bytes, aprime[0].bytes);
         sc_add(temp.bytes, temp.bytes, temp2.bytes);
         sc_mul(A1_data[3].scalar.bytes, temp.bytes, INV_EIGHT.bytes);
-        ge_p3 H_p3;
-        ge_frombytes_vartime(&H_p3, rct::H.bytes);
-        A1_data[3].point = H_p3;
+        ge_p3 h_p3;
+        ge_frombytes_vartime(&h_p3, h_key.bytes);
+        A1_data[3].point = h_p3;
 
         rct::key A1 = multiexp(A1_data, 0);
 
@@ -753,7 +753,7 @@ try_again:
         sc_mul(temp.bytes, temp.bytes, INV_EIGHT.bytes);
         sc_mul(temp2.bytes, eta.bytes, INV_EIGHT.bytes);
         rct::key B;
-        rct::addKeys2(B, temp2, temp, rct::H);
+        rct::addKeys2(B, temp2, temp, h_key);
 
         rct::key e = transcript_update(transcript, A1, B);
         if (e == rct::zero())
@@ -777,17 +777,30 @@ try_again:
         return BulletproofPlus(std::move(V), A, A1, B, r1, s1, d1, std::move(L), std::move(R));
     }
 
+    BulletproofPlus bulletproof_plus_PROVE(const rct::keyV &sv, const rct::keyV &gamma)
+    {
+        return bulletproof_plus_PROVE_impl(sv, gamma, rct::H);
+    }
+
     BulletproofPlus bulletproof_plus_PROVE(const std::vector<uint64_t> &v, const rct::keyV &gamma)
     {
-        CHECK_AND_ASSERT_THROW_MES(v.size() == gamma.size(), "Incompatible sizes of v and gamma");
-
-        // vG + gammaH
         rct::keyV sv(v.size());
         for (size_t i = 0; i < v.size(); ++i)
-        {
             sv[i] = rct::d2h(v[i]);
-        }
-        return bulletproof_plus_PROVE(sv, gamma);
+        return bulletproof_plus_PROVE_impl(sv, gamma, rct::H);
+    }
+
+    BulletproofPlus bulletproof_plus_PROVE_CA(const rct::keyV &sv, const rct::keyV &gamma, const rct::key &h)
+    {
+        return bulletproof_plus_PROVE_impl(sv, gamma, h);
+    }
+
+    BulletproofPlus bulletproof_plus_PROVE_CA(const std::vector<uint64_t> &v, const rct::keyV &gamma, const rct::key &h)
+    {
+        rct::keyV sv(v.size());
+        for (size_t i = 0; i < v.size(); ++i)
+            sv[i] = rct::d2h(v[i]);
+        return bulletproof_plus_PROVE_impl(sv, gamma, h);
     }
 
     struct bp_plus_proof_data_t

@@ -776,6 +776,7 @@ private:
     std::vector<pending_tx> ca_register_asset(const cryptonote::asset_descriptor_base& descriptor, uint32_t subaddr_account, uint32_t priority);
     std::vector<pending_tx> ca_emit_asset(const crypto::hash& asset_id, uint64_t amount, const crypto::secret_key& owner_skey, uint32_t subaddr_account, uint32_t priority);
     std::vector<pending_tx> ca_burn_asset(const crypto::hash& asset_id, uint64_t amount, const crypto::secret_key& owner_skey, uint32_t subaddr_account, uint32_t priority);
+    bool ca_get_asset_list(std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> &assets) const;
 
     bool sanity_check(const std::vector<pending_tx> &ptx_vector, std::vector<cryptonote::tx_destination_entry> dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);

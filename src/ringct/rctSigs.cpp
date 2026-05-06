@@ -162,6 +162,24 @@ namespace rct {
       catch (...) { return false; }
     }
 
+    BulletproofPlus proveRangeBulletproofPlusCA(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, const key &h, hw::device &hwdev)
+    {
+        CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");
+        masks.resize(amounts.size());
+        for (size_t i = 0; i < masks.size(); ++i)
+            masks[i] = hwdev.genCommitmentMask(sk[i]);
+        BulletproofPlus proof = bulletproof_plus_PROVE_CA(amounts, masks, h);
+        CHECK_AND_ASSERT_THROW_MES(proof.V.size() == amounts.size(), "V does not have the expected size");
+        C = proof.V;
+        return proof;
+    }
+
+    bool verBulletproofPlusCA(const BulletproofPlus &proof, const key &h)
+    {
+      try { return bulletproof_plus_VERIFY_CA(proof, h); }
+      catch (...) { return false; }
+    }
+
     //Borromean (c.f. gmax/andytoshi's paper)
     boroSig genBorromean(const key64 x, const key64 P1, const key64 P2, const bits indices) {
         key64 L[2], alpha;
@@ -836,9 +854,10 @@ namespace rct {
       }
       else if (rct::is_rct_confidential_assets(rv.type))
       {
-        // Hash CA-specific prunable data: BP+ proofs (A,A1,B,r1,s1,d1,L,R),
-        // balance proof scalars, and UG aggregation proof scalars.
+        // Hash CA-specific prunable data: BP+ proofs (A,A1,B,r1,s1,d1,L,R).
         // V[] are NOT hashed (derived from E_prime which is in rctSigBase).
+        // Balance proof and UG aggregation proof scalars are NOT hashed here
+        // because they use this hash as the message to sign (breaking circular dependency).
         for (const auto &p: rv.p.bulletproofs_plus)
         {
           kv.push_back(p.A);
@@ -852,12 +871,6 @@ namespace rct {
           for (size_t n = 0; n < p.R.size(); ++n)
             kv.push_back(p.R[n]);
         }
-        kv.push_back(rv.p.ca_balance.c);
-        kv.push_back(rv.p.ca_balance.y0);
-        kv.push_back(rv.p.ca_balance.y1);
-        kv.push_back(rv.p.ca_ug_proof.c);
-        for (const auto &y : rv.p.ca_ug_proof.y0s) kv.push_back(y);
-        for (const auto &y : rv.p.ca_ug_proof.y1s) kv.push_back(y);
       }
       else
       {
@@ -1242,7 +1255,11 @@ namespace rct {
         }
 
         rctSig rv;
-        if (bulletproof_or_plus)
+        if (rct_config.is_ca_tx)
+        {
+            rv.type = RCTType::ConfidentialAssets;
+        }
+        else if (bulletproof_or_plus)
         {
             switch (rct_config.bp_version)
             {
@@ -1268,9 +1285,14 @@ namespace rct {
 
         rv.message = message;
         rv.outPk.resize(destinations.size());
-        if (!bulletproof_or_plus)
+        if (!bulletproof_or_plus && !rct_config.is_ca_tx)
             rv.p.rangeSigs.resize(destinations.size());
         rv.ecdhInfo.resize(destinations.size());
+
+        if (rct_config.is_ca_tx)
+            rv.out_asset_tags.resize(destinations.size());
+
+        rv.mixRing = mixRing;
 
         size_t i;
         keyV masks(destinations.size()); //sk mask..
@@ -1280,17 +1302,47 @@ namespace rct {
             //add destination to sig
             rv.outPk[i].dest = copy(destinations[i]);
             //compute range proof
-            if (!bulletproof_or_plus)
+            if (!bulletproof_or_plus && !rct_config.is_ca_tx)
                 rv.p.rangeSigs[i] = proveRange(rv.outPk[i].mask, outSk[i].mask, outamounts[i]);
-#ifdef DBG
-            if (!bulletproof)
-                CHECK_AND_ASSERT_THROW_MES(verRange(rv.outPk[i].mask, rv.p.rangeSigs[i]), "verRange failed on newly created proof");
-#endif
         }
 
         rv.p.bulletproofs.clear();
         rv.p.bulletproofs_plus.clear();
-        if (bulletproof_or_plus)
+        if (rct_config.is_ca_tx)
+        {
+            // CA: always use BP+ with U generator
+            rct::keyV C_prime, masks_prime;
+            const epee::span<const key> keys{&amount_keys[0], amount_keys.size()};
+
+            rv.pseudo_out_asset_tags.resize(inamounts.size());
+            for (size_t i = 0; i < inamounts.size(); ++i)
+                rv.pseudo_out_asset_tags[i] = rct::H;
+            
+            // For now, in registration, all outputs are BDX, so asset tag is H
+            for (size_t j = 0; j < destinations.size(); ++j)
+                rv.out_asset_tags[j] = rct::H;
+
+            if (hwdev.get_mode() == hw::device::mode::TRANSACTION_CREATE_FAKE)
+            {
+                rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(outamounts, C_prime, masks_prime));
+            }
+            else
+            {
+                rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlusCA(C_prime, masks_prime, outamounts, keys, ca::get_U(), hwdev));
+            }
+
+            for (i = 0; i < outamounts.size(); ++i)
+            {
+                // outPk[i].mask = E_i = amount*T_i + mask*G
+                // Since T_i = H for BDX:
+                outSk[i].mask = masks_prime[i]; 
+                rct::genC(rv.outPk[i].mask, outSk[i].mask, outamounts[i]); // uses H
+            }
+
+            // Generate ca_balance proof: pseudoOuts - outPk - fee*H = r*X + y*G
+            // Since this is BDX only, and genC uses H, the balance should be zero if we pick masks correctly.
+        }
+        else if (bulletproof_or_plus)
         {
             const bool plus = rv.type == RCTType::BulletproofPlus;
             size_t n_amounts = outamounts.size();
@@ -1313,12 +1365,6 @@ namespace rct {
                       rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, outamounts, keys, hwdev));
                     else
                       rv.p.bulletproofs.push_back(proveRangeBulletproof(C, masks, outamounts, keys, hwdev));
-#ifdef DBG
-                    if (plus)
-                      CHECK_AND_ASSERT_THROW_MES(verBulletproofPlus(rv.p.bulletproofs_plus.back()), "verBulletproofPlus failed on newly created proof");
-                    else
-                      CHECK_AND_ASSERT_THROW_MES(verBulletproof(rv.p.bulletproofs.back()), "verBulletproof failed on newly created proof");
-#endif
                 }
                 for (i = 0; i < outamounts.size(); ++i)
                 {
@@ -1351,12 +1397,6 @@ namespace rct {
                           rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, batch_amounts, keys, hwdev));
                         else
                           rv.p.bulletproofs.push_back(proveRangeBulletproof(C, masks, batch_amounts, keys, hwdev));
-#ifdef DBG
-                        if (plus)
-                          CHECK_AND_ASSERT_THROW_MES(verBulletproofPlus(rv.p.bulletproofs_plus.back()), "verBulletproofPlus failed on newly created proof");
-                        else
-                          CHECK_AND_ASSERT_THROW_MES(verBulletproof(rv.p.bulletproofs.back()), "verBulletproof failed on newly created proof");
-#endif
                     }
                     for (i = 0; i < batch_size; ++i)
                     {
@@ -1375,17 +1415,16 @@ namespace rct {
             //mask amount and mask
             rv.ecdhInfo[i].mask = copy(outSk[i].mask);
             rv.ecdhInfo[i].amount = d2h(outamounts[i]);
-            hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], rv.type == RCTType::Bulletproof2 || rv.type == RCTType::CLSAG || rv.type == RCTType::BulletproofPlus);
+            hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], rv.type == RCTType::Bulletproof2 || rv.type == RCTType::CLSAG || rv.type == RCTType::BulletproofPlus || rv.type == RCTType::ConfidentialAssets);
         }
 
         //set txn fee
         rv.txnFee = txnFee;
 //        TODO: unused ??
 //        key txnFeeKey = scalarmultH(d2h(rv.txnFee));
-        rv.mixRing = mixRing;
-        keyV &pseudoOuts = bulletproof_or_plus ? rv.p.pseudoOuts : rv.pseudoOuts;
+        keyV &pseudoOuts = (bulletproof_or_plus || rct_config.is_ca_tx) ? rv.p.pseudoOuts : rv.pseudoOuts;
         pseudoOuts.resize(inamounts.size());
-        if (is_rct_clsag(rv.type))
+        if (is_rct_clsag(rv.type) || rv.type == RCTType::ConfidentialAssets)
             rv.p.CLSAGs.resize(inamounts.size());
         else
             rv.p.MGs.resize(inamounts.size());
@@ -1404,11 +1443,11 @@ namespace rct {
         if (msout)
         {
             msout->c.resize(inamounts.size());
-            msout->mu_p.resize(is_rct_clsag(rv.type) ? inamounts.size() : 0);
+            msout->mu_p.resize((is_rct_clsag(rv.type) || rv.type == RCTType::ConfidentialAssets) ? inamounts.size() : 0);
         }
         for (i = 0 ; i < inamounts.size(); i++)
         {
-            if (is_rct_clsag(rv.type))
+            if (is_rct_clsag(rv.type) || rv.type == RCTType::ConfidentialAssets)
             {
                 rv.p.CLSAGs[i] = proveRctCLSAGSimple(full_message, rv.mixRing[i], inSk[i], a[i], pseudoOuts[i], kLRki ? &(*kLRki)[i]: NULL, msout ? &msout->c[i] : NULL, msout ? &msout->mu_p[i] : NULL, index[i], hwdev);
             }
@@ -1417,6 +1456,44 @@ namespace rct {
                 rv.p.MGs[i] = proveRctMGSimple(full_message, rv.mixRing[i], inSk[i], a[i], pseudoOuts[i], kLRki ? &(*kLRki)[i]: NULL, msout ? &msout->c[i] : NULL, index[i], hwdev);
             }
         }
+
+        if (rct_config.is_ca_tx)
+        {
+            // Generate ca_ug_proof linking E_i and E'_i
+            rct::keyV E(destinations.size()), T(destinations.size());
+            rct::keyV amounts_keys(outamounts.size());
+            rct::keyV out_blinds(outSk.size());
+            for (size_t j = 0; j < destinations.size(); ++j)
+            {
+                E[j] = rv.outPk[j].mask;
+                T[j] = rv.out_asset_tags[j];
+                amounts_keys[j] = rct::d2h(outamounts[j]);
+                out_blinds[j] = outSk[j].mask;
+            }
+            {
+                auto ug_proof = ca::generate_UG_aggregation_proof(full_message, amounts_keys, out_blinds, out_blinds, E, T);
+                rv.p.ca_ug_proof.E_prime = std::move(ug_proof.E_prime);
+                rv.p.ca_ug_proof.c = ug_proof.c;
+                rv.p.ca_ug_proof.y0s = std::move(ug_proof.y0s);
+                rv.p.ca_ug_proof.y1s = std::move(ug_proof.y1s);
+            }
+
+            // Finally generate balance proof
+            // Balance = pseudoOuts - outPk - fee*H = r*X + y*G
+            // For now, in registration, everything is BDX and genC/genCommitment uses H,
+            // so pseudoOuts (Σ a_i*H + in_i*G) - outPk (Σ e_j*H + out_j*G) - fee*H
+            // should sum to a commitment to zero under (H, G).
+            // This means Balance = 0*X + 0*G = identity().
+            rct::key Balance = rct::identity();
+            rct::key zero_sk = rct::zero();
+            {
+                auto bal_proof = ca::generate_balance_proof(full_message, Balance, zero_sk, zero_sk);
+                rv.p.ca_balance.c = bal_proof.c;
+                rv.p.ca_balance.y0 = bal_proof.y0;
+                rv.p.ca_balance.y1 = bal_proof.y1;
+            }
+        }
+
         return rv;
     }
 

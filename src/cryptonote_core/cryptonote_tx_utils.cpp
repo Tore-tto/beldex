@@ -745,13 +745,14 @@ namespace cryptonote
       }
 
       //check that derivated key is equal with real output key (if non multisig)
-      if(!msout && !(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest) )
+      if(!msout && !(in_ephemeral.pub == out_key) )
       {
         LOG_ERROR("derived public key mismatch with output public key at index " << idx << ", real out " << src_entr.real_output << "!\nderived_key:"
           << tools::type_to_hex(in_ephemeral.pub) << "\nreal output_public_key:"
-          << tools::type_to_hex(src_entr.outputs[src_entr.real_output].second.dest) );
+          << tools::type_to_hex(out_key) );
         LOG_ERROR("amount " << src_entr.amount << ", rct " << src_entr.rct);
         LOG_ERROR("tx pubkey " << src_entr.real_out_tx_key << ", real_output_in_tx_index " << src_entr.real_output_in_tx_index);
+        LOG_ERROR("is_ca_tx: " << rct_config.is_ca_tx);
         return false;
       }
 
@@ -866,9 +867,23 @@ namespace cryptonote
 
       tx_out out;
       out.amount = dst_entr.amount;
-      txout_to_key tk;
-      tk.key = out_eph_public_key;
-      out.target = tk;
+      if (rct_config.is_ca_tx)
+      {
+        txout_zarcanum zout;
+        zout.stealth_address = out_eph_public_key;
+        zout.concealing_point = crypto::null_pkey;
+        zout.amount_commitment = crypto::null_pkey;
+        zout.blinded_asset_id = rct::rct2pk(rct::H);
+        zout.encrypted_amount = 0;
+        zout.mix_attr = 0;
+        out.target = zout;
+      }
+      else
+      {
+        txout_to_key tk;
+        tk.key = out_eph_public_key;
+        out.target = tk;
+      }
       tx.vout.push_back(out);
       output_index++;
       summary_outs_money += dst_entr.amount;
@@ -1009,7 +1024,12 @@ namespace cryptonote
               }
           }
           for (size_t i = 0; i < tx.vout.size(); ++i) {
-              dest_keys.push_back(rct::pk2rct(var::get<txout_to_key>(tx.vout[i].target).key));
+              crypto::public_key out_key;
+              if (auto tk = std::get_if<txout_to_key>(&tx.vout[i].target)) out_key = tk->key;
+              else if (auto zout = std::get_if<txout_zarcanum>(&tx.vout[i].target)) out_key = zout->stealth_address;
+              else { LOG_ERROR("Unsupported output target type"); return false; }
+
+              dest_keys.push_back(rct::pk2rct(out_key));
               outamounts.push_back(tx.vout[i].amount);
               amount_out += tx.vout[i].amount;
           }
@@ -1084,6 +1104,33 @@ namespace cryptonote
 
           CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size(), false, "outSk size does not match vout");
 
+          if (rct_config.is_ca_tx)
+          {
+            for (size_t i = 0; i < tx.vout.size(); ++i)
+            {
+              auto zout = std::get_if<txout_zarcanum>(&tx.vout[i].target);
+              if (!zout) continue;
+
+              crypto::secret_key h_scalar = rct::rct2sk(amount_keys[i]);
+
+              // Q = h*G
+              crypto::secret_key_to_public_key(h_scalar, zout->concealing_point);
+
+              // E = amount_commitment
+              zout->amount_commitment = rct::rct2pk(tx.rct_signatures.outPk[i].mask);
+
+              // T = blinded_asset_id
+              zout->blinded_asset_id = rct::rct2pk(tx.rct_signatures.out_asset_tags[i]);
+
+              // encrypted_amount = amount ^ Hs(h)
+              crypto::hash amount_mask;
+              crypto::cn_fast_hash(h_scalar.data, sizeof(h_scalar.data), amount_mask);
+              uint64_t mask64;
+              std::memcpy(&mask64, amount_mask.data, sizeof(mask64));
+              zout->encrypted_amount = outamounts[i] ^ mask64;
+            }
+          }
+
           MCINFO("construct_tx",
                  "transaction_created: " << get_transaction_hash(tx) << "\n" << obj_to_json_str(tx) << "\n");
     }
@@ -1132,7 +1179,8 @@ namespace cryptonote
      // tx generation code).
      rct::RCTConfig rct_config{
               tx_params.hf_version < hf::hf10_bulletproofs ? rct::RangeProofType::Borromean : rct::RangeProofType::PaddedBulletproof,
-              tx_params.hf_version >= feature::CLSAG ? 3 : tx_params.hf_version >= feature::SMALLER_BP ? 2 : 1
+              tx_params.hf_version >= feature::CLSAG ? 3 : tx_params.hf_version >= feature::SMALLER_BP ? 2 : 1,
+              tx_params.tx_type == txtype::confidential_asset
       };
 
      return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, unlock_time, tx_key, additional_tx_keys, rct_config, NULL, tx_params);

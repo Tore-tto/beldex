@@ -361,6 +361,7 @@ namespace rct {
     struct RCTConfig {
       RangeProofType range_proof_type;
       int bp_version;
+      bool is_ca_tx = false;
     };
     struct rctSigBase {
         RCTType type;
