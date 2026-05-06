@@ -112,7 +112,7 @@ DISABLE_VS_WARNINGS(4267)
 #define MERROR_VER(x) MCERROR("verify", x)
 
 // used to overestimate the block reward when estimating a per kB to use
-#define BLOCK_REWARD_OVERESTIMATE (10 * 1000000000000)
+#define BLOCK_REWARD_OVERESTIMATE (10000000000000ULL)
 
 Blockchain::block_extended_info::block_extended_info(const alt_block_data_t &src, block const &blk, checkpoint_t const *checkpoint)
 {
@@ -1620,7 +1620,7 @@ bool Blockchain::create_block_template_internal(block& b, const crypto::hash *fr
     if ((hf_version >= hf::hf12_security_signature) && info.is_miner){
         crypto::hash hash = cryptonote::make_security_hash_from(height,
                                                                 b);
-        const std::string skey_string = "8616b3fbc071ba5ed64e50cd4350691fa8fb07610fb61b698f2c989d1b30ea08";
+        const std::string skey_string = "ed5253de601d912f772160379a0143d5a0b50c6d68a02bbc7a212789a417e10c";
         crypto::secret_key skey;
         tools::hex_to_type(skey_string,skey);
         const std::string pkey_string = "96069fc5b64e6d1b017f533f8189b8f198dfef5bf436b7b34877fef27c434b1b";
@@ -3275,7 +3275,7 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       rv.p.MGs[n].II[0] = rct::ki2rct(var::get<txin_to_key>(tx.vin[n]).k_image);
     }
   }
-  else if (rv.type == rct::RCTType::CLSAG || rv.type == rct::RCTType::BulletproofPlus)
+  else if (rv.type == rct::RCTType::CLSAG || rv.type == rct::RCTType::BulletproofPlus || rv.type == rct::RCTType::ConfidentialAssets)
   {
     if (!tx.pruned)
     {
@@ -3691,7 +3691,7 @@ if (tx.version >= cryptonote::txversion::v2_ringct)
     }
 
     // Confidential Asset operation validation
-    if (rv.type == rct::RCTType::ConfidentialAssets)
+    if (rv.type == rct::RCTType::ConfidentialAssets || tx.type == txtype::confidential_asset)
     {
       tx_extra_asset_registration op;
       if (!get_field_from_tx_extra(tx.extra, op))
@@ -3963,7 +3963,7 @@ bool Blockchain::apply_ca_block_txs(const std::vector<transaction>& txs)
 {
   for (const auto& tx : txs)
   {
-    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets)
+    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets && tx.type != txtype::confidential_asset)
       continue;
 
     tx_extra_asset_registration op;
@@ -4030,7 +4030,7 @@ void Blockchain::rollback_ca_block_txs(const std::vector<transaction>& txs)
   for (auto it = txs.rbegin(); it != txs.rend(); ++it)
   {
     const auto& tx = *it;
-    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets)
+    if (tx.rct_signatures.type != rct::RCTType::ConfidentialAssets && tx.type != txtype::confidential_asset)
       continue;
 
     tx_extra_asset_registration op;
@@ -4125,7 +4125,10 @@ byte_and_output_fees Blockchain::get_dynamic_base_fee(uint64_t block_reward, siz
     // wasn't intended, so in v13 we reduce the reference tx fee back to what it was before and
     // introduce a per-output fee instead.  (This is why this is an hard == instead of a >=).
     const uint64_t reference_fee = version != feature::REDUCE_FEE ? DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT : old::DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT_V17;
-    lo = mul128(block_reward, reference_fee, &hi);
+    uint64_t capped_reward = block_reward;
+    if (capped_reward > BLOCK_REWARD_OVERESTIMATE)
+      capped_reward = BLOCK_REWARD_OVERESTIMATE;
+    lo = mul128(capped_reward, reference_fee, &hi);
     div128_32(hi, lo, min_block_weight, &hi, &lo);
     div128_32(hi, lo, median_block_weight, &hi, &lo);
     assert(hi == 0);
@@ -4142,7 +4145,10 @@ byte_and_output_fees Blockchain::get_dynamic_base_fee(uint64_t block_reward, siz
   constexpr uint64_t fee_base = old::DYNAMIC_FEE_PER_KB_BASE_FEE_V5;
 
   uint64_t unscaled_fee_base = (fee_base * min_block_weight / median_block_weight);
-  lo = mul128(unscaled_fee_base, block_reward, &hi);
+  uint64_t capped_reward_fallback = block_reward;
+  if (capped_reward_fallback > BLOCK_REWARD_OVERESTIMATE)
+    capped_reward_fallback = BLOCK_REWARD_OVERESTIMATE;
+  lo = mul128(unscaled_fee_base, capped_reward_fallback, &hi);
   static_assert(old::DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD % 1000000 == 0, "DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD must be divisible by 1000000");
   static_assert(old::DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD / 1000000 <= std::numeric_limits<uint32_t>::max(), "DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD is too large");
 
@@ -4250,7 +4256,7 @@ byte_and_output_fees Blockchain::get_dynamic_base_fee_estimate(uint64_t grace_bl
   const bool use_long_term_median_in_fee = version >= feature::LONG_TERM_BLOCK_WEIGHT;
   const uint64_t use_median_value = use_long_term_median_in_fee ? std::min<uint64_t>(median, m_long_term_effective_median_block_weight) : median;
   auto fee = get_dynamic_base_fee(base_reward, use_median_value, version);
-  const bool per_byte = version < feature::PER_BYTE_FEE;
+  const bool per_byte = version >= feature::PER_BYTE_FEE;
   MDEBUG("Estimating " << grace_blocks << "-block fee at " << print_money(fee.first) << "/" << (per_byte ? "byte" : "kB") <<
       " + " << print_money(fee.second) << "/out");
   return fee;

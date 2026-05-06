@@ -453,6 +453,7 @@ private:
                                const cryptonote::asset_descriptor_base& desc) override;
   bool remove_asset_descriptor(const crypto::hash& asset_id) override;
   bool asset_descriptor_exists(const crypto::hash& asset_id) const override;
+  bool for_all_asset_descriptors(std::function<bool(const crypto::hash&, const cryptonote::asset_descriptor_base&)> f) const override;
 
 private:
   template <typename T,

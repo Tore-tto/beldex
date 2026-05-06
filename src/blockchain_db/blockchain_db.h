@@ -1846,6 +1846,8 @@ public:
   /// Returns true if asset_id is registered.
   virtual bool asset_descriptor_exists(const crypto::hash& asset_id) const = 0;
 
+  virtual bool for_all_asset_descriptors(std::function<bool(const crypto::hash&, const cryptonote::asset_descriptor_base&)>) const = 0;
+
   // This function accepts an empty timestamps/difficulties array to fill, or
   // a prior timestamps/difficulties array that was filled by a previous call to
   // this same function in which case it will optimally insert and remove the

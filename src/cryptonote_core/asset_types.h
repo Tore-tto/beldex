@@ -24,6 +24,8 @@
 #include "serialization/string.h"
 #include "serialization/binary_utils.h"
 
+#include "epee/serialization/keyvalue_serialization.h"
+
 namespace cryptonote {
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,18 @@ struct asset_descriptor_base
       FIELD(owner)
       FIELD(hidden_supply)
     END_SERIALIZE()
+
+    BEGIN_KV_SERIALIZE_MAP()
+      KV_SERIALIZE(version)
+      KV_SERIALIZE(total_max_supply)
+      KV_SERIALIZE(current_supply)
+      KV_SERIALIZE(decimal_point)
+      KV_SERIALIZE(ticker)
+      KV_SERIALIZE(full_name)
+      KV_SERIALIZE(meta_info)
+      KV_SERIALIZE_VAL_POD_AS_BLOB(owner)
+      KV_SERIALIZE(hidden_supply)
+    END_KV_SERIALIZE_MAP()
 };
 
 // ---------------------------------------------------------------------------

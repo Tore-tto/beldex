@@ -1141,8 +1141,8 @@ uint64_t BlockchainLMDB::add_output(const crypto::hash& tx_hash,
   CURSOR(output_txs)
   CURSOR(output_amounts)
 
-  if (!std::holds_alternative<txout_to_key>(tx_output.target))
-    throw0(DB_ERROR("Wrong output type: expected txout_to_key"));
+  if (!std::holds_alternative<txout_to_key>(tx_output.target) && !std::holds_alternative<txout_zarcanum>(tx_output.target))
+    throw0(DB_ERROR("Wrong output type: expected txout_to_key or txout_zarcanum"));
   if (tx_output.amount == 0 && !commitment)
     throw0(DB_ERROR("RCT output without commitment"));
 
@@ -1170,7 +1170,10 @@ uint64_t BlockchainLMDB::add_output(const crypto::hash& tx_hash,
   else
     ok.amount_index = 0;
   ok.output_id = m_num_outputs;
-  ok.data.pubkey = var::get<txout_to_key>(tx_output.target).key;
+  if (std::holds_alternative<txout_to_key>(tx_output.target))
+    ok.data.pubkey = var::get<txout_to_key>(tx_output.target).key;
+  else if (std::holds_alternative<txout_zarcanum>(tx_output.target))
+    ok.data.pubkey = var::get<txout_zarcanum>(tx_output.target).stealth_address;
   ok.data.unlock_time = unlock_time;
   ok.data.height = m_height;
   if (tx_output.amount == 0)
@@ -6419,8 +6422,39 @@ bool BlockchainLMDB::remove_asset_descriptor(const crypto::hash& asset_id)
   if (result != MDB_SUCCESS)
     throw0(DB_ERROR(lmdb_error("Error finding asset descriptor to remove: ", result)));
   result = mdb_cursor_del(m_cursors->asset_descriptors, 0);
-  if (result)
+    if (result)
     throw0(DB_ERROR(lmdb_error("Failed to remove asset descriptor: ", result)));
+  return true;
+}
+
+bool BlockchainLMDB::for_all_asset_descriptors(std::function<bool(const crypto::hash&, const cryptonote::asset_descriptor_base&)> f) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  RCURSOR(asset_descriptors);
+
+  MDB_val k, v;
+  int result = mdb_cursor_get(m_cursors->asset_descriptors, &k, &v, MDB_FIRST);
+  while (result == MDB_SUCCESS) {
+    crypto::hash asset_id;
+    if (k.mv_size != sizeof(asset_id))
+      throw0(DB_ERROR("Invalid asset descriptor key size"));
+    memcpy(&asset_id, k.mv_data, sizeof(asset_id));
+
+    cryptonote::asset_descriptor_base desc;
+    deserialize_asset_descriptor(v.mv_data, v.mv_size, desc);
+
+    if (!f(asset_id, desc))
+      return false;
+
+    result = mdb_cursor_get(m_cursors->asset_descriptors, &k, &v, MDB_NEXT);
+  }
+
+  if (result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Error iterating asset descriptors: ", result)));
+
   return true;
 }
 
