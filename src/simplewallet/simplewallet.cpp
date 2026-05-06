@@ -269,6 +269,7 @@ namespace
   const char* USAGE_COIN_BURN("coin_burn [index=<N1>[,<N2>,...]] [<priority>] <burn=amount | txid>");
 
   const char* USAGE_CA_REGISTER_ASSET("ca_register_asset [flash|unimportant] <full_name> <ticker> <decimal_point> <total_max_supply> <owner_address>");
+  const char* USAGE_CA_LIST_ASSETS("ca_list_assets");
   const char* USAGE_CA_EMIT_ASSET("ca_emit_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
   const char* USAGE_CA_BURN_ASSET("ca_burn_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
   const char* USAGE_CA_GET_BALANCES("ca_get_balances");
@@ -3111,6 +3112,7 @@ Pending or Failed: "failed"|"pending",  "out", Lock, Checkpointed, Time, Amount*
   m_cmd_binder.set_handler("version", [this](const auto& x) { return version(x); }, USAGE_VERSION, tr("Show wallet version"));
 
   m_cmd_binder.set_handler("ca_register_asset", [this](const auto& x) { return ca_register_asset(x); }, USAGE_CA_REGISTER_ASSET, tr("Register a new Confidential Asset"));
+  m_cmd_binder.set_handler("ca_list_assets", [this](const auto& x) { return ca_list_assets(x); }, USAGE_CA_LIST_ASSETS, tr("List all registered Confidential Assets"));
   m_cmd_binder.set_handler("ca_emit_asset", [this](const auto& x) { return ca_emit_asset(x); }, USAGE_CA_EMIT_ASSET, tr("Emit (mint) Confidential Asset units"));
   m_cmd_binder.set_handler("ca_burn_asset", [this](const auto& x) { return ca_burn_asset(x); }, USAGE_CA_BURN_ASSET, tr("Burn (destroy) Confidential Asset units"));
   m_cmd_binder.set_handler("ca_get_balances", [this](const auto& x) { return ca_get_balances(x); }, USAGE_CA_GET_BALANCES, tr("Show all asset balances"));
@@ -9416,6 +9418,7 @@ bool simple_wallet::ca_get_balances(const std::vector<std::string> &args)
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::ca_register_asset(const std::vector<std::string> &args)
 {
+  SCOPED_WALLET_UNLOCK();
   uint32_t priority = 0;
   std::vector<std::string> local_args = args;
   if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
@@ -9458,6 +9461,7 @@ bool simple_wallet::ca_register_asset(const std::vector<std::string> &args)
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::ca_emit_asset(const std::vector<std::string> &args)
 {
+  SCOPED_WALLET_UNLOCK();
   uint32_t priority = 0;
   std::vector<std::string> local_args = args;
   if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
@@ -9502,6 +9506,7 @@ bool simple_wallet::ca_emit_asset(const std::vector<std::string> &args)
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::ca_burn_asset(const std::vector<std::string> &args)
 {
+  SCOPED_WALLET_UNLOCK();
   uint32_t priority = 0;
   std::vector<std::string> local_args = args;
   if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
@@ -9539,6 +9544,36 @@ bool simple_wallet::ca_burn_asset(const std::vector<std::string> &args)
   catch (const std::exception& e)
   {
     fail_msg_writer() << tr("Failed to burn asset: ") << e.what();
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::ca_list_assets(const std::vector<std::string> &args)
+{
+  std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> assets;
+  if (!m_wallet->ca_get_asset_list(assets))
+  {
+    fail_msg_writer() << tr("Failed to get asset list from daemon");
+    return true;
+  }
+
+  if (assets.empty())
+  {
+    success_msg_writer() << tr("No assets registered on-chain");
+    return true;
+  }
+
+  success_msg_writer() << tr("Registered Confidential Assets:");
+  for (const auto& a : assets)
+  {
+    success_msg_writer() << "  Asset ID: " << a.asset_id;
+    success_msg_writer() << "    Full Name: " << a.descriptor.full_name;
+    success_msg_writer() << "    Ticker:    " << a.descriptor.ticker;
+    success_msg_writer() << "    Decimals:  " << (uint32_t)a.descriptor.decimal_point;
+    success_msg_writer() << "    Max Supply: " << a.descriptor.total_max_supply;
+    success_msg_writer() << "    Owner:     " << a.descriptor.owner;
+    success_msg_writer() << "";
   }
 
   return true;

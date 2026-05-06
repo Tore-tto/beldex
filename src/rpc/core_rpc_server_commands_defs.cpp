@@ -37,6 +37,38 @@ namespace cryptonote {
       {"prev_height", c.prev_height},
     };
   };
+
+  void to_json(nlohmann::json& j, const asset_descriptor_base& d)
+  {
+    j = nlohmann::json
+    {
+      {"version", d.version},
+      {"total_max_supply", d.total_max_supply},
+      {"current_supply", d.current_supply},
+      {"decimal_point", d.decimal_point},
+      {"ticker", d.ticker},
+      {"full_name", d.full_name},
+      {"meta_info", d.meta_info},
+      {"owner", tools::type_to_hex(d.owner)},
+      {"hidden_supply", d.hidden_supply},
+    };
+  }
+
+  void from_json(const nlohmann::json& j, asset_descriptor_base& d)
+  {
+    j.at("version").get_to(d.version);
+    j.at("total_max_supply").get_to(d.total_max_supply);
+    j.at("current_supply").get_to(d.current_supply);
+    j.at("decimal_point").get_to(d.decimal_point);
+    j.at("ticker").get_to(d.ticker);
+    j.at("full_name").get_to(d.full_name);
+    j.at("meta_info").get_to(d.meta_info);
+    std::string owner_hex;
+    j.at("owner").get_to(owner_hex);
+    if (!tools::hex_to_type(owner_hex, d.owner))
+      throw std::runtime_error("Invalid owner public key hex");
+    j.at("hidden_supply").get_to(d.hidden_supply);
+  }
 }
 
 namespace master_nodes {
@@ -53,6 +85,19 @@ namespace master_nodes {
 }
 
 namespace cryptonote::rpc {
+
+void fill_asset_descriptor_response(asset_descriptor_response& res, const asset_descriptor_base& d)
+{
+  res.version = d.version;
+  res.total_max_supply = d.total_max_supply;
+  res.current_supply = d.current_supply;
+  res.decimal_point = d.decimal_point;
+  res.ticker = d.ticker;
+  res.full_name = d.full_name;
+  res.meta_info = d.meta_info;
+  res.owner = tools::type_to_hex(d.owner);
+  res.hidden_supply = d.hidden_supply;
+}
 
 void RPC_COMMAND::set_bt() {
   bt = true;
@@ -166,6 +211,45 @@ void from_json(const nlohmann::json& j, GET_OUTPUT_HISTOGRAM::entry& e)
   j.at("unlocked_instances").get_to(e.unlocked_instances);
   j.at("recent_instances").get_to(e.recent_instances);
 };
+
+void to_json(nlohmann::json& j, const asset_descriptor_response& d)
+{
+  j = nlohmann::json
+  {
+    {"version", d.version},
+    {"total_max_supply", d.total_max_supply},
+    {"current_supply", d.current_supply},
+    {"decimal_point", d.decimal_point},
+    {"ticker", d.ticker},
+    {"full_name", d.full_name},
+    {"meta_info", d.meta_info},
+    {"owner", d.owner},
+    {"hidden_supply", d.hidden_supply},
+  };
+}
+
+void from_json(const nlohmann::json& j, asset_descriptor_response& d)
+{
+  j.at("version").get_to(d.version);
+  j.at("total_max_supply").get_to(d.total_max_supply);
+  j.at("current_supply").get_to(d.current_supply);
+  j.at("decimal_point").get_to(d.decimal_point);
+  j.at("ticker").get_to(d.ticker);
+  j.at("full_name").get_to(d.full_name);
+  j.at("meta_info").get_to(d.meta_info);
+  j.at("owner").get_to(d.owner);
+  j.at("hidden_supply").get_to(d.hidden_supply);
+}
+
+void to_json(nlohmann::json& j, const GET_ASSET_LIST::entry& e)
+{
+  j = nlohmann::json{{"asset_id", e.asset_id}, {"descriptor", e.descriptor}};
+}
+void from_json(const nlohmann::json& j, GET_ASSET_LIST::entry& e)
+{
+  j.at("asset_id").get_to(e.asset_id);
+  j.at("descriptor").get_to(e.descriptor);
+}
 
 void to_json(nlohmann::json& j, const GET_OUTPUT_DISTRIBUTION::distribution& y)
 {

@@ -66,6 +66,7 @@ public:
   std::pair<bool, nlohmann::json> bns_owners_to_names(nlohmann::json const &request) const;
   std::pair<bool, nlohmann::json> bns_names_to_owners(nlohmann::json const &request) const;
   std::pair<bool, nlohmann::json> bns_resolve(nlohmann::json const &request) const;
+  bool get_asset_list(std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> &assets) const;
 
 private:
   bool get_info() const;

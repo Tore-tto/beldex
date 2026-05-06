@@ -442,4 +442,18 @@ std::pair<bool, nlohmann::json> NodeRPCProxy::bns_resolve(nlohmann::json const& 
   return result;
 }
 
+bool NodeRPCProxy::get_asset_list(std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> &assets) const
+{
+  if (m_offline)
+    return false;
+
+  try {
+    auto res = invoke_json_rpc<cryptonote::rpc::GET_ASSET_LIST>({});
+    assets = res.assets;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 }

@@ -113,13 +113,13 @@ auto make_invoke() {
 
     server.invoke(rpc, std::move(request.context));
 
-    if (rpc.response.is_null())
-      rpc.response = json::object();
+    if (rpc.RPC_COMMAND::response.is_null())
+      rpc.RPC_COMMAND::response = json::object();
 
     if (rpc.is_bt())
-      return json_to_bt(std::move(rpc.response));
+      return json_to_bt(std::move(rpc.RPC_COMMAND::response));
     else
-      return std::move(rpc.response);
+      return std::move(rpc.RPC_COMMAND::response);
   };
 }
 

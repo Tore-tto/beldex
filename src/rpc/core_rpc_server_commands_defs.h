@@ -689,6 +689,31 @@ namespace cryptonote::rpc {
   // FIXME: This struct should go; it's just a bit of indirection (in _commands_defs.cpp) that isn't
   // solve anything (because we can just set the fields directly in the output json values rather
   // than use `fill_block_header_response`).
+  struct asset_descriptor_response
+  {
+    uint32_t version;
+    uint64_t total_max_supply;
+    uint64_t current_supply;
+    uint32_t decimal_point;
+    std::string ticker;
+    std::string full_name;
+    std::string meta_info;
+    std::string owner;
+    bool hidden_supply;
+
+    BEGIN_KV_SERIALIZE_MAP()
+      KV_SERIALIZE(version)
+      KV_SERIALIZE(total_max_supply)
+      KV_SERIALIZE(current_supply)
+      KV_SERIALIZE(decimal_point)
+      KV_SERIALIZE(ticker)
+      KV_SERIALIZE(full_name)
+      KV_SERIALIZE(meta_info)
+      KV_SERIALIZE(owner)
+      KV_SERIALIZE(hidden_supply)
+    END_KV_SERIALIZE_MAP()
+  };
+
   struct block_header_response
   {
       uint8_t major_version;
@@ -716,6 +741,8 @@ namespace cryptonote::rpc {
 
   void to_json(nlohmann::json& j, const block_header_response& h);
   void from_json(const nlohmann::json& j, block_header_response& h);
+
+  void fill_asset_descriptor_response(asset_descriptor_response& res, const asset_descriptor_base& d);
 
   /// RPC: blockchain/get_last_block_header
   ///
@@ -1622,6 +1649,40 @@ namespace cryptonote::rpc {
     } request;
 
   };
+
+  /// RPC: blockchain/get_asset_list
+  ///
+  /// Get a list of all registered Confidential Assets.
+  struct GET_ASSET_LIST : PUBLIC, NO_ARGS
+  {
+    static constexpr auto names() { return NAMES("get_asset_list"); }
+
+    struct entry
+    {
+      std::string asset_id;
+      asset_descriptor_response descriptor;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(asset_id)
+        KV_SERIALIZE(descriptor)
+      END_KV_SERIALIZE_MAP()
+    };
+    struct request {
+      BEGIN_KV_SERIALIZE_MAP()
+      END_KV_SERIALIZE_MAP()
+    };
+    struct response {
+      std::string status;
+      std::vector<entry> assets;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(status)
+        KV_SERIALIZE(assets)
+      END_KV_SERIALIZE_MAP()
+    };
+  };
+  void to_json(nlohmann::json& j, const GET_ASSET_LIST::entry& c);
+  void from_json(const nlohmann::json& j, GET_ASSET_LIST::entry& c);
 
   /// RPC: blockchain/get_alternative_chains
   ///
@@ -2671,6 +2732,7 @@ namespace cryptonote::rpc {
     FLUSH_TRANSACTION_POOL,
     GET_ALTERNATE_CHAINS,
     GET_BANS,
+    GET_ASSET_LIST,
     GET_FEE_ESTIMATE,
     GET_BLOCK,
     GET_BLOCK_COUNT,
@@ -2716,6 +2778,7 @@ namespace cryptonote::rpc {
     BNS_VALUE_DECRYPT,
     OUT_PEERS,
     GET_OUTPUT_DISTRIBUTION,
+    GET_ASSET_LIST,
     POP_BLOCKS,
     PRUNE_BLOCKCHAIN,
     REPORT_PEER_STATUS,

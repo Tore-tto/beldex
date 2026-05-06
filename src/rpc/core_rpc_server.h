@@ -192,6 +192,7 @@ namespace cryptonote::rpc {
     void invoke(GET_QUORUM_STATE& get_quorum_state, rpc_context context);
     void invoke(GET_ALTERNATE_CHAINS& get_alternate_chains, rpc_context context);
     void invoke(GET_OUTPUT_HISTOGRAM& get_output_histogram, rpc_context context);
+    void invoke(GET_ASSET_LIST& get_asset_list, rpc_context context);
     void invoke(BNS_OWNERS_TO_NAMES& bns_owners_to_names, rpc_context context);
     void invoke(BNS_NAMES_TO_OWNERS& bns_names_to_owners, rpc_context context);
     void invoke(BNS_RESOLVE& resolve, rpc_context context);

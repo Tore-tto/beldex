@@ -289,6 +289,7 @@ namespace cryptonote
     bool ca_register_asset(const std::vector<std::string> &args);
     bool ca_emit_asset(const std::vector<std::string> &args);
     bool ca_burn_asset(const std::vector<std::string> &args);
+    bool ca_list_assets(const std::vector<std::string> &args);
     bool ca_get_balances(const std::vector<std::string> &args);
 
     bool register_master_node_main(

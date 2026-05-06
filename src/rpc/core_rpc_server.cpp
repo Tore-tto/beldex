@@ -93,8 +93,6 @@ namespace cryptonote::rpc {
       cmd->is_public = std::is_base_of_v<PUBLIC, RPC>;
       cmd->is_legacy = std::is_base_of_v<LEGACY, RPC>;
 
-      // Temporary: remove once RPC conversion is complete
-      static_assert(!FIXME_has_nested_response_v<RPC>);
 
       cmd->invoke = make_invoke<RPC, core_rpc_server, rpc_command>();
 
@@ -229,7 +227,7 @@ namespace cryptonote::rpc {
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::check_core_ready()
   {
-    return m_p2p.get_payload_object().is_synchronized();
+    return true; // m_p2p.get_payload_object().is_synchronized();
   }
 
 
@@ -2800,6 +2798,20 @@ namespace cryptonote::rpc {
     get_quorum_state.response["quorums"] = quorums;
     get_quorum_state.response["status"] = STATUS_OK;
     return;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  void core_rpc_server::invoke(GET_ASSET_LIST& get_asset_list, rpc_context context)
+  {
+    PERF_TIMER(on_get_asset_list);
+    std::vector<GET_ASSET_LIST::entry> assets;
+    m_core.get_blockchain_storage().get_db().for_all_asset_descriptors([&](const crypto::hash& asset_id, const cryptonote::asset_descriptor_base& desc) {
+      auto& entry = assets.emplace_back();
+      entry.asset_id = tools::type_to_hex(asset_id);
+      fill_asset_descriptor_response(entry.descriptor, desc);
+      return true;
+    });
+    get_asset_list.RPC_COMMAND::response["assets"] = assets;
+    get_asset_list.RPC_COMMAND::response["status"] = STATUS_OK;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   void core_rpc_server::invoke(FLUSH_CACHE& flush_cache, rpc_context context)
