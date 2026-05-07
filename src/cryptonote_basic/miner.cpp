@@ -64,7 +64,9 @@ namespace cryptonote
   miner::miner(i_miner_handler* phandler, const get_block_hash_t &gbh):m_stop(1),
     m_template{},
     m_phandler(phandler),
-    m_gbh(gbh)
+    m_gbh(gbh),
+    m_threads_total(0),
+    m_pausers_count(0)
   {}
   //-----------------------------------------------------------------------------------------------------
   miner::~miner()
@@ -113,6 +115,25 @@ namespace cryptonote
   {
     m_update_block_template_interval.do_call([&](){
       if(is_mining())request_block_template();
+      return true;
+    });
+
+    m_update_hashrate_interval.do_call([&](){
+      if(is_mining())
+      {
+        auto now = std::chrono::steady_clock::now();
+        if (m_last_hr_update)
+        {
+          auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - *m_last_hr_update).count();
+          if (duration > 0)
+          {
+            uint64_t hashes = m_hashes.exchange(0);
+            std::unique_lock lock{m_hashrate_mutex};
+            m_current_hash_rate = (double)hashes / (duration / 1000000.0);
+          }
+        }
+        m_last_hr_update = now;
+      }
       return true;
     });
 
