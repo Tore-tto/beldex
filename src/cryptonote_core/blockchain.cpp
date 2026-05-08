@@ -263,8 +263,22 @@ bool Blockchain::scan_outputkeys_for_indexes(const txin_to_key& tx_in_to_key, vi
         else
           output_index = m_db->get_output_key(tx_in_to_key.amount, i);
 
+        // Fetch asset tag
+        rct::key asset_tag = rct::H;
+        try {
+          tx_out_index toi = m_db->get_output_tx_and_index(tx_in_to_key.amount, i);
+          cryptonote::transaction tx;
+          if (m_db->get_tx(toi.first, tx))
+          {
+            if (toi.second < tx.vout.size() && std::holds_alternative<cryptonote::txout_zarcanum>(tx.vout[toi.second].target))
+              asset_tag = rct::pk2rct(std::get<cryptonote::txout_zarcanum>(tx.vout[toi.second].target).blinded_asset_id);
+          }
+        } catch (...) {
+          MDEBUG("Failed to fetch asset tag for output " << i << ", defaulting to H");
+        }
+
         // call to the passed boost visitor to grab the public key for the output
-        if (!vis.handle_output(output_index.unlock_time, output_index.pubkey, output_index.commitment))
+        if (!vis.handle_output(output_index.unlock_time, output_index.pubkey, output_index.commitment, asset_tag))
         {
           MERROR_VER("Failed to handle_output for output no = " << count << ", with absolute offset " << i);
           return false;
@@ -2479,15 +2493,30 @@ bool Blockchain::get_outs(const rpc::GET_OUTPUTS_BIN::request& req, rpc::GET_OUT
       MERROR("Unexpected output data size: expected " << req.outputs.size() << ", got " << data.size());
       return false;
     }
-    for (const auto &t: data)
-      res.outs.push_back({t.pubkey, t.commitment, is_output_spendtime_unlocked(t.unlock_time), t.height, crypto::null_hash});
-
-    if (req.get_txid)
+    for (size_t i = 0; i < data.size(); ++i)
     {
-      for (size_t i = 0; i < req.outputs.size(); ++i)
+      const auto &t = data[i];
+      res.outs.push_back({t.pubkey, t.commitment, rct::identity(), is_output_spendtime_unlocked(t.unlock_time), t.height, crypto::null_hash});
+      
+      // Fetch asset tag
+      tx_out_index toi = m_db->get_output_tx_and_index(req.outputs[i].amount, req.outputs[i].index);
+      res.outs[i].txid = toi.first;
+
+      cryptonote::transaction tx;
+      if (m_db->get_tx(toi.first, tx))
       {
-        tx_out_index toi = m_db->get_output_tx_and_index(req.outputs[i].amount, req.outputs[i].index);
-        res.outs[i].txid = toi.first;
+        if (toi.second < tx.vout.size())
+        {
+          if (std::holds_alternative<cryptonote::txout_zarcanum>(tx.vout[toi.second].target))
+          {
+            const auto& z = std::get<cryptonote::txout_zarcanum>(tx.vout[toi.second].target);
+            res.outs[i].asset_tag = rct::pk2rct(z.blinded_asset_id);
+          }
+          else
+          {
+            res.outs[i].asset_tag = rct::H; // Native BDX
+          }
+        }
       }
     }
   }
@@ -2847,6 +2876,8 @@ bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, cons
     }
   }
 
+  MINFO("find_blockchain_supplement: total_height=" << get_current_blockchain_height() << ", start_height=" << start_height << ", max_count=" << max_count);
+
   db_rtxn_guard rtxn_guard(m_db);
   total_height = get_current_blockchain_height();
   size_t count = 0, size = 0;
@@ -3044,7 +3075,7 @@ void Blockchain::on_new_tx_from_block(const cryptonote::transaction &tx)
 // This function overloads its sister function with
 // an extra value (hash of highest block that holds an output used as input)
 // as a return-by-reference.
-bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_height, crypto::hash& max_used_block_id, tx_verification_context &tvc, bool kept_by_block, std::unordered_set<crypto::key_image>* key_image_conflicts)
+bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_height, crypto::hash& max_used_block_id, tx_verification_context &tvc, bool kept_by_block, std::unordered_set<crypto::key_image>* key_image_conflicts, std::vector<std::vector<rct::key>> *ring_asset_tags)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   std::unique_lock lock{*this};
@@ -3060,7 +3091,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 #endif
 
   auto a = std::chrono::steady_clock::now();
-  bool res = check_tx_inputs(tx, tvc, &max_used_block_height, key_image_conflicts);
+  bool res = check_tx_inputs(tx, tvc, &max_used_block_height, key_image_conflicts, ring_asset_tags);
   if(m_show_time_stats)
   {
     size_t ring_size = 0;
@@ -3214,7 +3245,7 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
   }
   return false;
 }
-bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys) const
+bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys, const std::vector<std::vector<rct::key>> &ring_asset_tags) const
 {
   PERF_TIMER(expand_transaction_2);
   CHECK_AND_ASSERT_MES(tx.version >= txversion::v2_ringct, false, "Transaction version is not 2 or greater");
@@ -3244,12 +3275,35 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
   {
     CHECK_AND_ASSERT_MES(!pubkeys.empty() && !pubkeys[0].empty(), false, "empty pubkeys");
     rv.mixRing.resize(pubkeys.size());
+    if (rv.type == rct::RCTType::ConfidentialAssets)
+      rv.mixRing_asset_tags.resize(pubkeys.size());
+
     for (size_t n = 0; n < pubkeys.size(); ++n)
     {
       rv.mixRing[n].clear();
+      if (rv.type == rct::RCTType::ConfidentialAssets)
+        rv.mixRing_asset_tags[n].clear();
+
       for (size_t m = 0; m < pubkeys[n].size(); ++m)
       {
         rv.mixRing[n].push_back(pubkeys[n][m]);
+        if (rv.type == rct::RCTType::ConfidentialAssets)
+        {
+          CHECK_AND_ASSERT_MES(n < ring_asset_tags.size() && m < ring_asset_tags[n].size(), false, "Asset tags missing for ring member");
+          rv.mixRing_asset_tags[n].push_back(ring_asset_tags[n][m]);
+        }
+      }
+    }
+
+    if (rv.type == rct::RCTType::ConfidentialAssets)
+    {
+      rv.out_asset_tags.clear();
+      for (const auto& out : tx.vout)
+      {
+        if (auto z = std::get_if<txout_zarcanum>(&out.target))
+          rv.out_asset_tags.push_back(rct::pk2rct(z->blinded_asset_id));
+        else
+          rv.out_asset_tags.push_back(rct::H); // Default to BDX
       }
     }
   }
@@ -3301,10 +3355,20 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
 //        check_tx_input() rather than here, and use this function simply
 //        to iterate the inputs as necessary (splitting the task
 //        using threads, etc.)
-bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height, std::unordered_set<crypto::key_image>* key_image_conflicts)
+bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height, std::unordered_set<crypto::key_image>* key_image_conflicts, std::vector<std::vector<rct::key>> *ring_asset_tags)
 {
   PERF_TIMER(check_tx_inputs);
   LOG_PRINT_L3("Blockchain::" << __func__);
+  std::vector<std::vector<rct::key>> ring_asset_tags_local;
+  if (ring_asset_tags)
+  {
+    ring_asset_tags->resize(tx.vin.size());
+  }
+  else
+  {
+    ring_asset_tags_local.resize(tx.vin.size());
+    ring_asset_tags = &ring_asset_tags_local;
+  }
   uint64_t max_used_block_height = 0;
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;
@@ -3339,7 +3403,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
 
     std::vector<std::vector<rct::ctkey>> pubkeys(tx.vin.size());
-    size_t sig_index = 0;
     const crypto::key_image *last_key_image = NULL;
     for (size_t sig_index = 0; sig_index < tx.vin.size(); sig_index++)
     {
@@ -3390,7 +3453,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
         // make sure that output being spent matches up correctly with the
         // signature spending it.
-        if (!check_tx_input(in_to_key, tx_prefix_hash, pubkeys[sig_index], pmax_used_block_height))
+        if (!check_tx_input(in_to_key, tx_prefix_hash, pubkeys[sig_index], (*ring_asset_tags)[sig_index], pmax_used_block_height))
         {
           MERROR_VER("Failed to check ring signature for tx " << get_transaction_hash(tx) << "  vin key with k_image: " << in_to_key.k_image << "  sig_index: " << sig_index);
           if (pmax_used_block_height) // a default value of NULL is used when called from Blockchain::handle_block_to_main_chain()
@@ -3436,7 +3499,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
 if (tx.version >= cryptonote::txversion::v2_ringct)
 	{
-    if (!expand_transaction_2(tx, tx_prefix_hash, pubkeys))
+    if (!expand_transaction_2(tx, tx_prefix_hash, pubkeys, *ring_asset_tags))
     {
       MERROR_VER("Failed to expand rct signatures!");
       return false;
@@ -4273,7 +4336,7 @@ bool Blockchain::is_output_spendtime_unlocked(uint64_t unlock_time) const
 //------------------------------------------------------------------
 // This function locates all outputs associated with a given input (mixins)
 // and validates that they exist and are usable.
-bool Blockchain::check_tx_input(const txin_to_key& txin, const crypto::hash& tx_prefix_hash, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height)
+bool Blockchain::check_tx_input(const txin_to_key& txin, const crypto::hash& tx_prefix_hash, std::vector<rct::ctkey> &output_keys, std::vector<rct::key> &asset_tags, uint64_t* pmax_related_block_height)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -4284,12 +4347,13 @@ bool Blockchain::check_tx_input(const txin_to_key& txin, const crypto::hash& tx_
   struct outputs_visitor
   {
     std::vector<rct::ctkey >& m_output_keys;
+    std::vector<rct::key>& m_asset_tags;
     const Blockchain& m_bch;
-    outputs_visitor(std::vector<rct::ctkey>& output_keys, const Blockchain& bch) :
-      m_output_keys(output_keys), m_bch(bch)
+    outputs_visitor(std::vector<rct::ctkey>& output_keys, std::vector<rct::key>& asset_tags, const Blockchain& bch) :
+      m_output_keys(output_keys), m_asset_tags(asset_tags), m_bch(bch)
     {
     }
-    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const rct::key &commitment)
+    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const rct::key &commitment, const rct::key &asset_tag)
     {
       //check tx unlock time
       if (!m_bch.is_output_spendtime_unlocked(unlock_time))
@@ -4304,14 +4368,16 @@ bool Blockchain::check_tx_input(const txin_to_key& txin, const crypto::hash& tx_
       // Blockchain*::add_output
 
       m_output_keys.push_back(rct::ctkey({rct::pk2rct(pubkey), commitment}));
+      m_asset_tags.push_back(asset_tag);
       return true;
     }
   };
 
   output_keys.clear();
+  asset_tags.clear();
 
   // collect output keys
-  outputs_visitor vi(output_keys, *this);
+  outputs_visitor vi(output_keys, asset_tags, *this);
   if (!scan_outputkeys_for_indexes(txin, vi, tx_prefix_hash, pmax_related_block_height))
   {
     MERROR_VER("Failed to get output keys for tx with amount = " << print_money(txin.amount) << " and count indexes " << txin.key_offsets.size());

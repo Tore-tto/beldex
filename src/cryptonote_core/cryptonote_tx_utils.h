@@ -144,6 +144,8 @@ namespace cryptonote
     bool rct;                           //true if the output is rct
     rct::key mask;                      //ringct amount mask
     rct::multisig_kLRki multisig_kLRki; //multisig info
+    crypto::hash asset_id = crypto::null_hash; // asset ID for this input
+    std::vector<rct::key> asset_tags;   // blinded asset tags for all outputs in the ring
 
     void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
 
@@ -170,6 +172,7 @@ namespace cryptonote
     account_public_address addr;        // Destination Address
     bool is_subaddress;
     bool is_integrated;
+    crypto::hash asset_id = crypto::null_hash; // asset ID for this output
 
     tx_destination_entry() : amount(0), addr{}, is_subaddress(false), is_integrated(false) { }
     tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false) { }
@@ -298,6 +301,7 @@ namespace boost
       }
       a & x.original;
       a & x.is_integrated;
+      a & x.asset_id;
     }
   }
 }

@@ -1688,8 +1688,9 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
   }
   else if (std::holds_alternative<txout_zarcanum>(o.target))
   {
-    out_key = &var::get<txout_zarcanum>(o.target).stealth_address;
-    tx_scan_info.is_ca = true;
+    const auto &z = var::get<txout_zarcanum>(o.target);
+    out_key = &z.stealth_address;
+    tx_scan_info.is_ca = (rct::pk2rct(z.blinded_asset_id) != rct::H);
   }
   else
   {
@@ -1702,6 +1703,8 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
   if(tx_scan_info.received)
   {
     tx_scan_info.money_transfered = o.amount; // may be 0 for ringct / CA outputs
+    if (std::holds_alternative<txout_zarcanum>(o.target))
+      tx_scan_info.money_transfered = 0;
   }
   else
   {
@@ -1716,9 +1719,10 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
     return check_acc_out_precomp(o, derivation, additional_derivations, i, tx_scan_info);
 
   tx_scan_info.received = is_out_data->received[i];
+  tx_scan_info.is_ca = (std::holds_alternative<txout_zarcanum>(o.target) && rct::pk2rct(var::get<txout_zarcanum>(o.target).blinded_asset_id) != rct::H);
   if(tx_scan_info.received)
   {
-    tx_scan_info.money_transfered = o.amount; // may be 0 for ringct outputs
+    tx_scan_info.money_transfered = std::holds_alternative<txout_zarcanum>(o.target) ? 0 : o.amount;
   }
   else
   {
@@ -1750,6 +1754,7 @@ static uint64_t decodeRct(const rct::rctSig & rv, const crypto::key_derivation &
     case rct::RCTType::Bulletproof2:
     case rct::RCTType::CLSAG:
     case rct::RCTType::BulletproofPlus:
+    case rct::RCTType::ConfidentialAssets:
       return rct::decodeRctSimple(rv, rct::sk2rct(scalar1), i, mask, hwdev);
     case rct::RCTType::Full:
       return rct::decodeRct(rv, rct::sk2rct(scalar1), i, mask, hwdev);
@@ -1792,8 +1797,8 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
     }
   }
 
-  const bool is_ca_out = tx_scan_info.is_ca;
-  const crypto::public_key &out_key = is_ca_out
+  const bool is_zarcanum = std::holds_alternative<cryptonote::txout_zarcanum>(tx.vout[vout_index].target);
+  const crypto::public_key &out_key = is_zarcanum
       ? var::get<cryptonote::txout_zarcanum>(tx.vout[vout_index].target).stealth_address
       : var::get<cryptonote::txout_to_key>(tx.vout[vout_index].target).key;
 
@@ -1814,7 +1819,7 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   THROW_WALLET_EXCEPTION_IF(std::find(outs.begin(), outs.end(), vout_index) != outs.end(), error::wallet_internal_error, "Same output cannot be added twice");
   if (tx_scan_info.money_transfered == 0 && !miner_tx)
   {
-    if (is_ca_out)
+    if (is_zarcanum)
     {
       // Decrypt the CA output amount: amount = encrypted_amount XOR trunc64(Hs(h||i))
       // where h = derivation_to_scalar(derivation, vout_index).
@@ -1826,11 +1831,13 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
       uint64_t mask64;
       std::memcpy(&mask64, amount_mask.data, sizeof(mask64));
       tx_scan_info.money_transfered = ca_out.encrypted_amount ^ mask64;
-      tx_scan_info.mask = rct::identity(); // CA outputs use commitment-based mask
+      MINFO("CA output decrypted: amount=" << cryptonote::print_money(tx_scan_info.money_transfered) << ", vout_index=" << vout_index << ", tx_asset_id=" << tx_scan_info.asset_id);
+      tx_scan_info.mask = rct::genCommitmentMask(rct::sk2rct(h_scalar));
     }
     else
     {
       tx_scan_info.money_transfered = tools::decodeRct(tx.rct_signatures, tx_scan_info.received->derivation, vout_index, tx_scan_info.mask, m_account.get_device());
+      MDEBUG("Standard RCT output decoded: amount=" << cryptonote::print_money(tx_scan_info.money_transfered) << ", vout_index=" << vout_index);
     }
     tx_scan_info.amount = tx_scan_info.money_transfered;
   }
@@ -1936,10 +1943,15 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
 
   // Extract confidential asset id from tx_extra if present.
   crypto::hash tx_asset_id = crypto::null_hash;
+  bool is_asset_emission = false;
   {
     tx_extra_asset_registration asset_reg;
     if (find_tx_extra_field_by_type(tx_extra_fields, asset_reg))
+    {
       tx_asset_id = asset_reg.asset_id;
+      is_asset_emission = (asset_reg.op_type == cryptonote::asset_operation_type::EMIT);
+      MINFO("CA asset ID extracted from tx_extra: " << tx_asset_id << " (emission=" << is_asset_emission << ") for tx " << txid);
+    }
   }
 
   // Don't try to extract tx public key if tx has no ouputs
@@ -2073,7 +2085,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
         if (tx_scan_info[i].received)
         {
-          tx_scan_info[i].asset_id = tx_asset_id;
+          if (is_asset_emission && std::holds_alternative<txout_zarcanum>(tx.vout[i].target))
+            tx_scan_info[i].asset_id = tx_asset_id;
+          else
+            tx_scan_info[i].asset_id = crypto::null_hash;
           hwdev.conceal_derivation(tx_scan_info[i].received->derivation, tx_pub_key, additional_tx_pub_keys.data, derivation, additional_derivations);
           scan_output(tx, miner_tx, tx_pub_key, i, tx_scan_info[i], tx_money_got_in_outs, outs, pool, flash);
         }
@@ -2087,7 +2102,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
         if (tx_scan_info[i].received)
         {
-          tx_scan_info[i].asset_id = tx_asset_id;
+          if (is_asset_emission && std::holds_alternative<txout_zarcanum>(tx.vout[i].target))
+            tx_scan_info[i].asset_id = tx_asset_id;
+          else
+            tx_scan_info[i].asset_id = crypto::null_hash;
           hw::device &hwdev = m_account.get_device();
           std::unique_lock hwdev_lock{hwdev};
           hwdev.set_mode(hw::device::mode::NONE);
@@ -2791,12 +2809,14 @@ void wallet2::pull_blocks(uint64_t start_height, uint64_t& blocks_start_height, 
   req.block_ids = short_chain_history;
 
   MDEBUG("Pulling blocks: start_height " << start_height);
+  LOG_PRINT_L1("pull_blocks: start_height=" << start_height << ", short_chain_history.size=" << short_chain_history.size());
 
   req.prune = true;
   req.start_height = start_height;
   req.no_miner_tx = m_refresh_type == RefreshNoCoinbase;
   bool r = invoke_http<rpc::GET_BLOCKS_BIN>(req, res);
   THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "getblocks.bin");
+  MINFO("pull_blocks: req.start_height=" << req.start_height << ", res.blocks.size=" << res.blocks.size() << ", res.start_height=" << res.start_height);
   THROW_WALLET_EXCEPTION_IF(res.status == rpc::STATUS_BUSY, error::daemon_busy, "getblocks.bin");
   THROW_WALLET_EXCEPTION_IF(res.status != rpc::STATUS_OK, error::get_blocks_error, get_rpc_status(res.status));
   THROW_WALLET_EXCEPTION_IF(res.blocks.size() != res.output_indices.size(), error::wallet_internal_error,
@@ -3614,8 +3634,10 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
       added_blocks = 0;
       if (!first && blocks.empty())
         break;
-      if (!last)
+      if (!last) {
+        MINFO("Fetching blocks starting from " << start_height << " (current blockchain size: " << m_blockchain.size() << ")");
         tpool.submit(&waiter, [&]{pull_and_parse_next_blocks(start_height, next_blocks_start_height, short_chain_history, blocks, parsed_blocks, next_blocks, next_parsed_blocks, last, error, exception);});
+      }
 
       if (!first)
       {
@@ -6104,7 +6126,7 @@ std::map<uint32_t, uint64_t> wallet2::balance_per_subaddress(uint32_t index_majo
   std::map<uint32_t, uint64_t> amount_per_subaddr;
   for (const auto& td: m_transfers)
   {
-    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && td.m_asset_id == crypto::null_hash)
     {
       auto found = amount_per_subaddr.find(td.m_subaddr_index.minor);
       if (found == amount_per_subaddr.end())
@@ -6138,7 +6160,7 @@ std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> wallet2::
   const uint64_t now = time(NULL);
   for(const transfer_details& td: m_transfers)
   {
-    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
+    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && td.m_asset_id == crypto::null_hash)
     {
       uint64_t amount = 0, blocks_to_unlock = 0, time_to_unlock = 0;
       if (is_transfer_unlocked(td))
@@ -9222,13 +9244,13 @@ bool wallet2::is_keys_file_locked() const
   return m_keys_file_locker->locked();
 }
 
-bool wallet2::tx_add_fake_output(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, uint64_t global_index, const crypto::public_key& output_public_key, const rct::key& mask, uint64_t real_index, bool unlocked) const
+bool wallet2::tx_add_fake_output(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, uint64_t global_index, const crypto::public_key& output_public_key, const rct::key& mask, const rct::key& asset_tag, uint64_t real_index, bool unlocked) const
 {
   if (!unlocked) // don't add locked outs
     return false;
   if (global_index == real_index) // don't re-add real one
     return false;
-  auto item = std::make_tuple(global_index, output_public_key, mask);
+  auto item = std::make_tuple(global_index, output_public_key, mask, asset_tag);
   CHECK_AND_ASSERT_MES(!outs.empty(), false, "internal error: outs is empty");
   if (std::find(outs.back().begin(), outs.back().end(), item) != outs.back().end()) // don't add duplicates
     return false;
@@ -9307,7 +9329,14 @@ void wallet2::light_wallet_get_outs(std::vector<std::vector<tools::wallet2::get_
     // add real output first
     const transfer_details &td = m_transfers[idx];
     const uint64_t amount = td.is_rct() ? 0 : td.amount();
-    outs.back().push_back(std::make_tuple(td.m_global_output_index, td.get_public_key(), rct::commit(td.amount(), td.m_mask)));
+    rct::key real_asset_tag = rct::H;
+    rct::key real_mask = rct::commit(td.amount(), td.m_mask);
+    if (auto zout = std::get_if<cryptonote::txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+    {
+        real_mask = rct::pk2rct(zout->amount_commitment);
+        real_asset_tag = rct::pk2rct(zout->blinded_asset_id);
+    }
+    outs.back().push_back(std::make_tuple(td.m_global_output_index, td.get_public_key(), real_mask, real_asset_tag));
     MDEBUG("added real output " << tools::type_to_hex(td.get_public_key()));
 
     // Even if the lightwallet server returns random outputs, we pick them randomly.
@@ -9350,7 +9379,7 @@ void wallet2::light_wallet_get_outs(std::vector<std::vector<tools::wallet2::get_
       if(!light_wallet_parse_rct_str(ores.amount_outs[amount_key].outputs[i].rct, tx_public_key, 0, mask, rct_commit, false))
         rct_commit = rct::zeroCommit(td.amount());
 
-      if (tx_add_fake_output(outs, global_index, tx_public_key, rct_commit, td.m_global_output_index, true)) {
+      if (tx_add_fake_output(outs, global_index, tx_public_key, rct_commit, rct::H, td.m_global_output_index, true)) {
         MDEBUG("added fake output " << ores.amount_outs[amount_key].outputs[i].public_key);
         MDEBUG("index " << global_index);
       }
@@ -9568,7 +9597,14 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
         MWARNING("get_outs: CA output (asset_id=" << tools::type_to_hex(td.m_asset_id)
                  << ") skipping RCT decoy pool – per-asset decoy selection not yet implemented");
         outs.emplace_back();
-        outs.back().emplace_back(td.m_global_output_index, td.get_public_key(), rct::identity());
+        rct::key real_asset_tag = rct::H;
+        rct::key real_mask = rct::identity();
+        if (auto zout = std::get_if<cryptonote::txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+        {
+          real_mask = rct::pk2rct(zout->amount_commitment);
+          real_asset_tag = rct::pk2rct(zout->blinded_asset_id);
+        }
+        outs.back().emplace_back(td.m_global_output_index, td.get_public_key(), real_mask, real_asset_tag);
         continue;
       }
 
@@ -9962,18 +9998,35 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       {
         size_t i = base + n;
         if (get_outputs[i].index == td.m_global_output_index)
+        {
           if (got_outs[i].key == target_key)
-            if (got_outs[i].mask == mask)
+          {
+            bool mask_matches = false;
+            if (auto zout = std::get_if<txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+              mask_matches = (got_outs[i].mask == rct::pk2rct(zout->amount_commitment));
+            else
+              mask_matches = (got_outs[i].mask == mask);
+
+            if (mask_matches)
             {
               real_out_found = true;
               break;
             }
+          }
+        }
       }
       THROW_WALLET_EXCEPTION_IF(!real_out_found, error::wallet_internal_error,
           "Daemon response did not include the requested real output");
 
       // pick real out first (it will be sorted when done)
-      outs.back().push_back(std::make_tuple(td.m_global_output_index, target_key, mask));
+      rct::key real_mask = mask;
+      rct::key real_asset_tag = rct::H;
+      if (auto zout = std::get_if<cryptonote::txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+      {
+        real_mask = rct::pk2rct(zout->amount_commitment);
+        real_asset_tag = rct::pk2rct(zout->blinded_asset_id);
+      }
+      outs.back().push_back(std::make_tuple(td.m_global_output_index, target_key, real_mask, real_asset_tag));
 
       // then pick outs from an existing ring, if any
       if (td.m_key_image_known && !td.m_key_image_partial)
@@ -9994,7 +10047,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
                   if (get_outputs[i].index == out)
                   {
                     LOG_PRINT_L2("Index " << i << "/" << requested_outputs_count << ": idx " << get_outputs[i].index << " (real " << td.m_global_output_index << "), unlocked " << got_outs[i].unlocked << ", key " << got_outs[i].key << " (from existing ring)");
-                    tx_add_fake_output(outs, get_outputs[i].index, got_outs[i].key, got_outs[i].mask, td.m_global_output_index, got_outs[i].unlocked);
+                    tx_add_fake_output(outs, get_outputs[i].index, got_outs[i].key, got_outs[i].mask, got_outs[i].asset_tag, td.m_global_output_index, got_outs[i].unlocked);
                     found = true;
                     break;
                   }
@@ -10019,7 +10072,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       {
         size_t i = base + order[o];
         LOG_PRINT_L2("Index " << i << "/" << requested_outputs_count << ": idx " << get_outputs[i].index << " (real " << td.m_global_output_index << "), unlocked " << got_outs[i].unlocked << ", key " << got_outs[i].key);
-        tx_add_fake_output(outs, get_outputs[i].index, got_outs[i].key, got_outs[i].mask, td.m_global_output_index, got_outs[i].unlocked);
+        tx_add_fake_output(outs, get_outputs[i].index, got_outs[i].key, got_outs[i].mask, got_outs[i].asset_tag, td.m_global_output_index, got_outs[i].unlocked);
       }
       if (outs.back().size() < fake_outputs_count + 1)
       {
@@ -10040,8 +10093,14 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     {
       const transfer_details &td = m_transfers[idx];
       std::vector<get_outs_entry> v;
-      const rct::key mask = td.is_rct() ? rct::commit(td.amount(), td.m_mask) : rct::zeroCommit(td.amount());
-      v.push_back(std::make_tuple(td.m_global_output_index, td.get_public_key(), mask));
+      rct::key real_mask = td.is_rct() ? rct::commit(td.amount(), td.m_mask) : rct::zeroCommit(td.amount());
+      rct::key real_asset_tag = rct::H;
+      if (auto zout = std::get_if<cryptonote::txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+      {
+        real_mask = rct::pk2rct(zout->amount_commitment);
+        real_asset_tag = rct::pk2rct(zout->blinded_asset_id);
+      }
+      v.push_back(std::make_tuple(td.m_global_output_index, td.get_public_key(), real_mask, real_asset_tag));
       outs.push_back(v);
     }
   }
@@ -10175,16 +10234,19 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     //paste mixin transaction
 
     THROW_WALLET_EXCEPTION_IF(outs.size() < out_index + 1 ,  error::wallet_internal_error, "outs.size() < out_index + 1");
-    THROW_WALLET_EXCEPTION_IF(outs[out_index].size() < fake_outputs_count ,  error::wallet_internal_error, "fake_outputs_count > random outputs found");
+    if (!td.is_ca())
+      THROW_WALLET_EXCEPTION_IF(outs[out_index].size() < fake_outputs_count ,  error::wallet_internal_error, "fake_outputs_count > random outputs found");
 
+    size_t actual_decoys = std::min(fake_outputs_count + 1, outs[out_index].size());
     typedef cryptonote::tx_source_entry::output_entry tx_output_entry;
-    for (size_t n = 0; n < fake_outputs_count + 1; ++n)
+    for (size_t n = 0; n < actual_decoys; ++n)
     {
       tx_output_entry oe;
       oe.first = std::get<0>(outs[out_index][n]);
       oe.second.dest = rct::pk2rct(std::get<1>(outs[out_index][n]));
       oe.second.mask = std::get<2>(outs[out_index][n]);
       src.outputs.push_back(oe);
+      src.asset_tags.push_back(std::get<3>(outs[out_index][n]));
     }
     ++i;
 
@@ -10200,7 +10262,13 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     real_oe.first = td.m_global_output_index;
     real_oe.second.dest = rct::pk2rct(td.get_public_key());
     real_oe.second.mask = rct::commit(td.amount(), td.m_mask);
+    
+    size_t real_pos = it_to_replace - src.outputs.begin();
     *it_to_replace = real_oe;
+    if (auto z = std::get_if<cryptonote::txout_zarcanum>(&td.m_tx.vout[td.m_internal_output_index].target))
+      src.asset_tags[real_pos] = rct::pk2rct(z->blinded_asset_id);
+    else
+      src.asset_tags[real_pos] = rct::H; // Native BDX
     src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
     src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
     src.real_output = it_to_replace - src.outputs.begin();
@@ -10413,7 +10481,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && td.m_asset_id == crypto::null_hash && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -10433,7 +10501,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && td.is_rct() && td.m_asset_id == crypto::null_hash && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -11251,7 +11319,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1 && td.m_asset_id == crypto::null_hash)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
