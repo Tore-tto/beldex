@@ -617,7 +617,7 @@ namespace cryptonote
      *
      * @return false if any input is invalid, otherwise true
      */
-    bool check_tx_inputs(transaction& tx, uint64_t& pmax_used_block_height, crypto::hash& max_used_block_id, tx_verification_context &tvc, bool kept_by_block = false, std::unordered_set<crypto::key_image>* key_image_conflicts = nullptr);
+    bool check_tx_inputs(transaction& tx, uint64_t& pmax_used_block_height, crypto::hash& max_used_block_id, tx_verification_context &tvc, bool kept_by_block = false, std::unordered_set<crypto::key_image>* key_image_conflicts = nullptr, std::vector<std::vector<rct::key>> *ring_asset_tags = nullptr);
 
     /**
      * @brief get fee quantization mask
@@ -1204,7 +1204,7 @@ namespace cryptonote
      *
      * @return false if any output is not yet unlocked, or is missing, otherwise true
      */
-    bool check_tx_input(const txin_to_key& txin, const crypto::hash& tx_prefix_hash, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height);
+    bool check_tx_input(const txin_to_key& txin, const crypto::hash& tx_prefix_hash, std::vector<rct::ctkey> &output_keys, std::vector<rct::key> &asset_tags, uint64_t* pmax_related_block_height);
 
     /**
      * @brief validate a transaction's inputs and their keys
@@ -1230,7 +1230,7 @@ namespace cryptonote
      *
      * @return false if any validation step fails, otherwise true
      */
-    bool check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height = nullptr, std::unordered_set<crypto::key_image>* key_image_conflicts = nullptr);
+    bool check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height = nullptr, std::unordered_set<crypto::key_image>* key_image_conflicts = nullptr, std::vector<std::vector<rct::key>> *ring_asset_tags = nullptr);
 
     /**
      * @brief performs a blockchain reorganization according to the longest chain rule
@@ -1513,7 +1513,7 @@ namespace cryptonote
      * can be reconstituted by the receiver. This function expands
      * that implicit data.
      */
-    bool expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys) const;
+    bool expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys, const std::vector<std::vector<rct::key>> &ring_asset_tags) const;
 
     /**
      * @brief invalidates any cached block template

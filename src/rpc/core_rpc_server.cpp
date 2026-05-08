@@ -284,6 +284,7 @@ namespace cryptonote::rpc {
     auto height = top_height + 1; // turn top block height into blockchain height
 
     info.response["height"] = height;
+    MINFO("on_get_info: height=" << height << ", target_height=" << m_core.get_target_blockchain_height());
     info.response_hex["top_block_hash"] = top_hash;
     info.response["target_height"] = m_core.get_target_blockchain_height();
 
@@ -608,6 +609,7 @@ namespace cryptonote::rpc {
         json_binary_proxy b{o, binary_format};
         b["key"] = std::move(outkey.key);
         b["mask"] = std::move(outkey.mask);
+        b["asset_tag"] = std::move(outkey.asset_tag);
         o["unlocked"] = outkey.unlocked;
         o["height"] = outkey.height;
         if (get_outputs.request.get_txid)
@@ -620,6 +622,7 @@ namespace cryptonote::rpc {
         json_binary_proxy b{o, binary_format};
         b.push_back(std::move(outkey.key));
         b.push_back(std::move(outkey.mask));
+        b.push_back(std::move(outkey.asset_tag));
         o.push_back(outkey.unlocked);
         o.push_back(outkey.height);
         if (get_outputs.request.get_txid)

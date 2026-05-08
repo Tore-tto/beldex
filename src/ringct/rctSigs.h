@@ -129,13 +129,15 @@ namespace rct {
     rctSig genRct(const key &message, const ctkeyV &inSk, const keyV &destinations, const std::vector<xmr_amount> &amounts, const ctkeyM &mixRing, const keyV &amount_keys, const multisig_kLRki *kLRki, multisig_out *msout, unsigned int index, ctkeyV &outSk, const RCTConfig &rct_config, hw::device &hwdev);
     rctSig genRct(const key &message, const ctkeyV &inSk, const ctkeyV  &inPk, const keyV &destinations, const std::vector<xmr_amount> &amounts, const keyV &amount_keys, const multisig_kLRki *kLRki, multisig_out *msout, const int mixin, const RCTConfig &rct_config, hw::device &hwdev);
 
-    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const ctkeyV & inPk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, const keyV &amount_keys, const std::vector<multisig_kLRki> *kLRki, multisig_out *msout, xmr_amount txnFee, unsigned int mixin, const RCTConfig &rct_config, hw::device &hwdev);
-    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, xmr_amount txnFee, const ctkeyM & mixRing, const keyV &amount_keys, const std::vector<multisig_kLRki> *kLRki, multisig_out *msout, const std::vector<unsigned int> & index, ctkeyV &outSk, const RCTConfig &rct_config, hw::device &hwdev);
+    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const ctkeyV & inPk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, const keyV &amount_keys, const keyV &pseudo_out_asset_tags, const keyV &out_asset_tags, const std::vector<keyV> &mixRing_asset_tags, const std::vector<multisig_kLRki> *kLRki, multisig_out *msout, xmr_amount txnFee, unsigned int mixin, const RCTConfig &rct_config, hw::device &hwdev);
+    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, xmr_amount txnFee, const ctkeyM & mixRing, const keyV &amount_keys, const keyV &pseudo_out_asset_tags, const keyV &out_asset_tags, const std::vector<keyV> &mixRing_asset_tags, const std::vector<multisig_kLRki> *kLRki, multisig_out *msout, const std::vector<unsigned int> & index, ctkeyV &outSk, const RCTConfig &rct_config, hw::device &hwdev);
     bool verRct(const rctSig & rv, bool semantics);
     inline bool verRct(const rctSig & rv) { return verRct(rv, true) && verRct(rv, false); }
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
     bool verRctNonSemanticsSimple(const rctSig & rv);
+    bool verRctCLSAGSimple(const key &message, const clsag &sig, const ctkeyV & pubs, const key & C_offset);
+    bool verRctCLSAGSimpleCA(const key &message, const clsag &sig, const ctkeyV & pubs, const key & C_offset, const keyV & asset_tags, const key & pseudo_out_asset_tag);
     inline bool verRctSimple(const rctSig & rv) { return verRctSemanticsSimple(rv) && verRctNonSemanticsSimple(rv); }
 
     // Confidential-asset (Zarcanum scheme) verification.

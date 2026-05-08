@@ -68,9 +68,13 @@ struct transfer_details
   bool is_ca() const { return m_is_ca; }
   uint64_t amount() const { return m_amount; }
   const crypto::public_key &get_public_key() const {
-    if (m_is_ca)
-      return var::get<cryptonote::txout_zarcanum>(m_tx.vout[m_internal_output_index].target).stealth_address;
-    return var::get<cryptonote::txout_to_key>(m_tx.vout[m_internal_output_index].target).key;
+    if (m_internal_output_index >= m_tx.vout.size())
+      return crypto::null_pkey;
+    if (auto z = std::get_if<cryptonote::txout_zarcanum>(&m_tx.vout[m_internal_output_index].target))
+      return z->stealth_address;
+    if (auto k = std::get_if<cryptonote::txout_to_key>(&m_tx.vout[m_internal_output_index].target))
+      return k->key;
+    return crypto::null_pkey;
   }
 };
 

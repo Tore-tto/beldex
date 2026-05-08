@@ -213,6 +213,7 @@ namespace cryptonote::rpc {
     {
       crypto::public_key key; // The public key of the output.
       rct::key mask;
+      rct::key asset_tag;     // Blinded asset tag
       bool unlocked;          // States if output is locked (`false`) or not (`true`).
       uint64_t height;        // Block height of the output.
       crypto::hash txid;      // Transaction id.

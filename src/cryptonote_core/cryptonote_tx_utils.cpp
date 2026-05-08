@@ -41,6 +41,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "ringct/rctSigs.h"
+#include "ringct/ca_primitives.h"
 #include "multisig/multisig.h"
 #include "epee/int-util.h"
 
@@ -1080,6 +1081,64 @@ namespace cryptonote
           for (size_t i = 0; i < tx.vout.size(); ++i)
               tx.vout[i].amount = 0;
 
+          if (rct_config.is_ca_tx)
+          {
+            for (size_t i = 0; i < tx.vout.size(); ++i)
+            {
+              auto zout = std::get_if<txout_zarcanum>(&tx.vout[i].target);
+              if (!zout) continue;
+
+              // Derive values manually before prefix hashing to avoid transcript mismatch
+              crypto::secret_key h_scalar = rct::rct2sk(amount_keys[i]);
+              crypto::secret_key_to_public_key(h_scalar, zout->concealing_point);
+
+              // T = blinded_asset_id. For now (BDX only), it's always H.
+              // In the future, this will be computed from the asset ID.
+              rct::key T = rct::H;
+              zout->blinded_asset_id = rct::rct2pk(T);
+
+              // E = amount_commitment = amount*T + mask*G
+              rct::key mask = hwdev.genCommitmentMask(amount_keys[i]);
+              rct::key E;
+              rct::genC(E, mask, outamounts[i]); // Note: genC uses H as base, we need it to use T
+              // Wait! genC in rctOps uses H. If T != H, we need a different genC.
+              // For BDX, T == H, so it's fine. 
+              // To be safe and forward-compatible, we'll use a manual commitment if T != H.
+              if (T == rct::H)
+                  rct::genC(E, mask, outamounts[i]);
+              else
+                  E = rct::addKeys(rct::scalarmultKey(T, rct::d2h(outamounts[i])), rct::scalarmultBase(mask));
+
+              zout->amount_commitment = rct::rct2pk(E);
+
+              // encrypted_amount = amount ^ Hs(h)
+              crypto::hash amount_mask;
+              crypto::cn_fast_hash(h_scalar.data, sizeof(h_scalar.data), amount_mask);
+              uint64_t mask64;
+              std::memcpy(&mask64, amount_mask.data, sizeof(mask64));
+              zout->encrypted_amount = outamounts[i] ^ mask64;
+            }
+          }
+
+          rct::keyV pseudo_out_asset_tags, out_asset_tags;
+          std::vector<rct::keyV> mixRing_asset_tags;
+          if (rct_config.is_ca_tx)
+          {
+            for (const auto& src : sources)
+            {
+              pseudo_out_asset_tags.push_back(src.asset_tags[src.real_output]);
+              mixRing_asset_tags.push_back(src.asset_tags);
+            }
+
+            for (size_t i = 0; i < tx.vout.size(); ++i)
+            {
+              if (auto z = std::get_if<txout_zarcanum>(&tx.vout[i].target))
+                out_asset_tags.push_back(rct::pk2rct(z->blinded_asset_id));
+              else
+                out_asset_tags.push_back(rct::H);
+            }
+          }
+
           crypto::hash tx_prefix_hash;
           get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
           rct::ctkeyV outSk;
@@ -1087,7 +1146,7 @@ namespace cryptonote
               LOG_PRINT_L2("genRctSimple");
               tx.rct_signatures = rct::genRctSimple(rct::hash2rct(tx_prefix_hash), inSk, dest_keys, inamounts,
                                                     outamounts,
-                                                    amount_in - amount_out, mixRing, amount_keys, msout ? &kLRki : NULL,
+                                                    amount_in - amount_out, mixRing, amount_keys, pseudo_out_asset_tags, out_asset_tags, mixRing_asset_tags, msout ? &kLRki : NULL,
                                                     msout, index, outSk, rct_config, hwdev);
           }
           else {
@@ -1101,35 +1160,6 @@ namespace cryptonote
 
 
           memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
-
-          CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size(), false, "outSk size does not match vout");
-
-          if (rct_config.is_ca_tx)
-          {
-            for (size_t i = 0; i < tx.vout.size(); ++i)
-            {
-              auto zout = std::get_if<txout_zarcanum>(&tx.vout[i].target);
-              if (!zout) continue;
-
-              crypto::secret_key h_scalar = rct::rct2sk(amount_keys[i]);
-
-              // Q = h*G
-              crypto::secret_key_to_public_key(h_scalar, zout->concealing_point);
-
-              // E = amount_commitment
-              zout->amount_commitment = rct::rct2pk(tx.rct_signatures.outPk[i].mask);
-
-              // T = blinded_asset_id
-              zout->blinded_asset_id = rct::rct2pk(tx.rct_signatures.out_asset_tags[i]);
-
-              // encrypted_amount = amount ^ Hs(h)
-              crypto::hash amount_mask;
-              crypto::cn_fast_hash(h_scalar.data, sizeof(h_scalar.data), amount_mask);
-              uint64_t mask64;
-              std::memcpy(&mask64, amount_mask.data, sizeof(mask64));
-              zout->encrypted_amount = outamounts[i] ^ mask64;
-            }
-          }
 
           MCINFO("construct_tx",
                  "transaction_created: " << get_transaction_hash(tx) << "\n" << obj_to_json_str(tx) << "\n");

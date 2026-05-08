@@ -1485,7 +1485,8 @@ namespace cryptonote
       }
     }
     std::unordered_set<crypto::key_image> key_image_conflicts;
-    bool ret = m_blockchain.check_tx_inputs(get_tx(), max_used_block_height, max_used_block_id, tvc, kept_by_block, flash_rollback_height ? &key_image_conflicts : nullptr);
+    std::vector<std::vector<rct::key>> ring_asset_tags;
+    bool ret = m_blockchain.check_tx_inputs(get_tx(), max_used_block_height, max_used_block_id, tvc, kept_by_block, flash_rollback_height ? &key_image_conflicts : nullptr, &ring_asset_tags);
 
     if (ret && !key_image_conflicts.empty())
     {
