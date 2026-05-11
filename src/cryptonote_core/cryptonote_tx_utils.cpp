@@ -887,7 +887,8 @@ namespace cryptonote
       }
       tx.vout.push_back(out);
       output_index++;
-      summary_outs_money += dst_entr.amount;
+      if (dst_entr.asset_id == crypto::null_hash)
+        summary_outs_money += dst_entr.amount;
     }
     CHECK_AND_ASSERT_MES(additional_tx_public_keys.size() == additional_tx_keys.size(), false, "Internal error creating additional public keys");
 
@@ -1032,7 +1033,8 @@ namespace cryptonote
 
               dest_keys.push_back(rct::pk2rct(out_key));
               outamounts.push_back(tx.vout[i].amount);
-              amount_out += tx.vout[i].amount;
+              if (destinations[i].asset_id == crypto::null_hash)
+                amount_out += tx.vout[i].amount;
           }
         if (use_simple_rct)
         {
@@ -1092,18 +1094,21 @@ namespace cryptonote
               crypto::secret_key h_scalar = rct::rct2sk(amount_keys[i]);
               crypto::secret_key_to_public_key(h_scalar, zout->concealing_point);
 
-              // T = blinded_asset_id. For now (BDX only), it's always H.
-              // In the future, this will be computed from the asset ID.
-              rct::key T = rct::H;
+              // T = blinded_asset_id.
+              rct::key T;
+              if (destinations[i].asset_id == crypto::null_hash)
+              {
+                T = rct::H;
+              }
+              else
+              {
+                T = ca::compute_asset_generator(destinations[i].asset_id);
+              }
               zout->blinded_asset_id = rct::rct2pk(T);
 
               // E = amount_commitment = amount*T + mask*G
               rct::key mask = hwdev.genCommitmentMask(amount_keys[i]);
               rct::key E;
-              rct::genC(E, mask, outamounts[i]); // Note: genC uses H as base, we need it to use T
-              // Wait! genC in rctOps uses H. If T != H, we need a different genC.
-              // For BDX, T == H, so it's fine. 
-              // To be safe and forward-compatible, we'll use a manual commitment if T != H.
               if (T == rct::H)
                   rct::genC(E, mask, outamounts[i]);
               else
