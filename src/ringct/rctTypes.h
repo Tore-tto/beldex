@@ -385,6 +385,7 @@ namespace rct {
         //   without requiring the full transaction output list.
         keyV out_asset_tags;
         std::vector<keyV> mixRing_asset_tags; // Not serialized, reconstructed from blockchain
+        key emission_credit;                 // Not serialized, calculated from tx_extra (for EMIT)
 
         template <typename Archive>
         void serialize_rctsig_base(Archive &ar, size_t inputs, size_t outputs)

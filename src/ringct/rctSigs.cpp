@@ -136,6 +136,18 @@ namespace rct {
       catch (...) { return false; }
     }
 
+    BulletproofPlus proveRangeBulletproofPlusCA(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, hw::device &hwdev, const key &h)
+    {
+        CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");
+        masks.resize(amounts.size());
+        for (size_t i = 0; i < masks.size(); ++i)
+            masks[i] = hwdev.genCommitmentMask(sk[i]);
+        BulletproofPlus proof = bulletproof_plus_PROVE_CA(amounts, masks, h);
+        CHECK_AND_ASSERT_THROW_MES(proof.V.size() == amounts.size(), "V does not have the expected size");
+        C = proof.V;
+        return proof;
+    }
+
     BulletproofPlus proveRangeBulletproofPlus(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, hw::device &hwdev)
     {
         CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");
@@ -160,24 +172,6 @@ namespace rct {
       try { return bulletproof_plus_VERIFY(proofs); }
       // we can get deep throws from ge_frombytes_vartime if input isn't valid
       catch (...) { return false; }
-    }
-
-    BulletproofPlus proveRangeBulletproofPlusCA(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, const key &h, hw::device &hwdev)
-    {
-        CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");
-        masks.resize(amounts.size());
-        for (size_t i = 0; i < masks.size(); ++i)
-            masks[i] = hwdev.genCommitmentMask(sk[i]);
-        BulletproofPlus proof = bulletproof_plus_PROVE_CA(amounts, masks, h);
-        CHECK_AND_ASSERT_THROW_MES(proof.V.size() == amounts.size(), "V does not have the expected size");
-        
-        // BulletproofPlus::V stores commitments scaled by 1/8 (Monero convention).
-        // We need the full commitments for E_prime in Confidential Assets.
-        C.resize(proof.V.size());
-        for (size_t i = 0; i < proof.V.size(); ++i)
-            C[i] = scalarmult8(proof.V[i]);
-
-        return proof;
     }
 
     bool verBulletproofPlusCA(const BulletproofPlus &proof, const key &h)
@@ -1360,11 +1354,14 @@ namespace rct {
             }
             else
             {
-                rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlusCA(C_prime, masks_prime, outamounts, keys, ca::get_U(), hwdev));
+                rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlusCA(C_prime, masks_prime, outamounts, keys, hwdev, ca::get_U()));
             }
 
-            // Populate E_prime now so it's included in the CLSAG pre-hash
-            rv.p.ca_ug_proof.E_prime = std::move(C_prime);
+            // Populate E_prime now so it's included in the CLSAG pre-hash.
+            // We must scale by 8 to convert from cofactor-offset convention to the prime-order point.
+            rv.p.ca_ug_proof.E_prime.clear();
+            for (const auto &c : C_prime)
+                rv.p.ca_ug_proof.E_prime.push_back(rct::scalarmult8(c));
 
             for (i = 0; i < outamounts.size(); ++i)
             {
@@ -1425,7 +1422,12 @@ namespace rct {
                     {
                         const epee::span<const key> keys{&amount_keys[amounts_proved], batch_size};
                         if (plus)
-                          rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, batch_amounts, keys, hwdev));
+                        {
+                          if (rct_config.is_ca_tx)
+                            rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlusCA(C, masks, batch_amounts, keys, hwdev, ca::get_U()));
+                          else
+                            rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, batch_amounts, keys, hwdev));
+                        }
                         else
                           rv.p.bulletproofs.push_back(proveRangeBulletproof(C, masks, batch_amounts, keys, hwdev));
                     }
@@ -1814,6 +1816,14 @@ namespace rct {
 
         key Balance;
         subKeys(Balance, sumPseudo, sumOutputs);
+
+        LOG_PRINT_L1("CA Balance Verification:");
+        LOG_PRINT_L1("  sumPseudo:      " << tools::type_to_hex(sumPseudo));
+        LOG_PRINT_L1("  sumOutputs+fee: " << tools::type_to_hex(sumOutputs));
+        LOG_PRINT_L1("  emission_credit: " << tools::type_to_hex(rv.emission_credit));
+        
+        addKeys(Balance, Balance, rv.emission_credit);
+        LOG_PRINT_L1("  Final Balance:   " << tools::type_to_hex(Balance));
 
         // --- 5. Verify balance proof ---
         {

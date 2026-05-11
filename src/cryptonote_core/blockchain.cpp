@@ -59,6 +59,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
 #include "ringct/rctSigs.h"
+#include "ringct/ca_primitives.h"
 #include "common/perf_timer.h"
 #include "master_node_voting.h"
 #include "master_node_list.h"
@@ -3634,6 +3635,25 @@ if (tx.version >= cryptonote::txversion::v2_ringct)
       }
 
       // Full CA non-semantics check: CLSAG ring sigs + balance proof + UG aggregation.
+      // We must first calculate the emission credit to compensate for minted/burned assets in the balance proof.
+      tx.rct_signatures.emission_credit = rct::identity();
+      tx_extra_asset_registration op;
+      if (get_field_from_tx_extra(tx.extra, op))
+      {
+        if (op.op_type == asset_operation_type::EMIT || op.op_type == asset_operation_type::BURN)
+        {
+          rct::key Ht = ca::compute_asset_generator(op.asset_id);
+          rct::key amount_scalar = rct::d2h(op.amount);
+          if (op.op_type == asset_operation_type::BURN)
+            ::sc_sub(amount_scalar.bytes, rct::zero().bytes, amount_scalar.bytes);
+          
+          tx.rct_signatures.emission_credit = rct::scalarmultKey(Ht, amount_scalar);
+          LOG_PRINT_L1("Calculated CA emission credit for " << (op.op_type == asset_operation_type::EMIT ? "EMIT" : "BURN") 
+                       << ": amount=" << op.amount << ", asset=" << tools::type_to_hex(op.asset_id) 
+                       << ", credit=" << tools::type_to_hex(tx.rct_signatures.emission_credit));
+        }
+      }
+
       if (!rct::verRctNonSemanticsCA(rv))
       {
         MERROR_VER("CA: Failed to check ringct signatures!");

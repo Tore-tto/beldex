@@ -270,7 +270,7 @@ namespace
 
   const char* USAGE_CA_REGISTER_ASSET("ca_register_asset [flash|unimportant] <full_name> <ticker> <decimal_point> <total_max_supply> <owner_address>");
   const char* USAGE_CA_LIST_ASSETS("ca_list_assets");
-  const char* USAGE_CA_EMIT_ASSET("ca_emit_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+  const char* USAGE_CA_EMIT_ASSET("ca_emit_asset [flash|unimportant] <asset_id> <amount> [<destination_address>] [<owner_secret_key>]");
   const char* USAGE_CA_BURN_ASSET("ca_burn_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
   const char* USAGE_CA_GET_BALANCES("ca_get_balances");
 
@@ -9467,9 +9467,9 @@ bool simple_wallet::ca_emit_asset(const std::vector<std::string> &args)
   if (!local_args.empty() && tools::parse_priority(local_args[0], priority))
     local_args.erase(local_args.begin());
 
-  if (local_args.size() != 3)
+  if (local_args.size() < 2 || local_args.size() > 4)
   {
-    fail_msg_writer() << tr("usage: ca_emit_asset [flash|unimportant] <asset_id> <amount> <owner_secret_key>");
+    fail_msg_writer() << tr("usage: ca_emit_asset [flash|unimportant] <asset_id> <amount> [<destination_address>] [<owner_secret_key>]");
     return true;
   }
 
@@ -9484,16 +9484,27 @@ bool simple_wallet::ca_emit_asset(const std::vector<std::string> &args)
 
   uint64_t amount = std::stoull(local_args[1]);
 
-  crypto::secret_key owner_skey;
-  if (!tools::hex_to_type(local_args[2], owner_skey))
+  std::string destination_addr;
+  if (local_args.size() >= 3)
+    destination_addr = local_args[2];
+  else
+    destination_addr = cryptonote::get_account_address_as_str(m_wallet->nettype(), false, m_wallet->get_account().get_keys().m_account_address);
+
+  std::optional<crypto::secret_key> owner_skey;
+  if (local_args.size() >= 4)
   {
-    fail_msg_writer() << tr("Invalid owner secret key");
-    return true;
+    crypto::secret_key skey;
+    if (!tools::hex_to_type(local_args[3], skey))
+    {
+      fail_msg_writer() << tr("Invalid owner secret key");
+      return true;
+    }
+    owner_skey = skey;
   }
 
   try
   {
-    std::vector<tools::wallet2::pending_tx> ptx = m_wallet->ca_emit_asset(asset_id, amount, owner_skey, m_current_subaddress_account, priority);
+    std::vector<tools::wallet2::pending_tx> ptx = m_wallet->ca_emit_asset(asset_id, amount, destination_addr, owner_skey, m_current_subaddress_account, priority);
     commit_or_save(ptx, m_do_not_relay, priority == 5);
   }
   catch (const std::exception& e)
