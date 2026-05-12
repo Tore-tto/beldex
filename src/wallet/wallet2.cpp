@@ -6306,6 +6306,8 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
   result.unlock_time = pd.m_unlock_time;
   result.fee = pd.m_fee;
   result.note = get_tx_note(pd.m_tx_hash);
+  result.is_ca = pd.m_is_ca;
+  result.asset_id = tools::type_to_hex(pd.m_asset_id);
   if (pd.m_is_ca) {
     std::string ticker = get_asset_ticker(pd.m_asset_id);
     auto it = m_asset_cache.find(pd.m_asset_id);
@@ -6359,6 +6361,11 @@ wallet::transfer_view wallet2::wallet2::make_transfer_view(const crypto::hash &t
     auto& td = result.destinations.back();
     td.amount = d.amount;
     td.address = d.address(nettype(), pd.m_payment_id);
+    td.asset_id = tools::type_to_hex(d.asset_id);
+    if (d.asset_id != crypto::null_hash && !result.is_ca) {
+      result.is_ca = true;
+      result.asset_id = tools::type_to_hex(d.asset_id);
+    }
   }
 
   result.pay_type = pd.m_pay_type;
@@ -6404,6 +6411,11 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
     auto& td = result.destinations.back();
     td.amount = d.amount;
     td.address = d.address(nettype(), pd.m_payment_id);
+    td.asset_id = tools::type_to_hex(d.asset_id);
+    if (d.asset_id != crypto::null_hash && !result.is_ca) {
+      result.is_ca = true;
+      result.asset_id = tools::type_to_hex(d.asset_id);
+    }
   }
 
   result.pay_type = pd.m_pay_type;
@@ -11640,8 +11652,10 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       needed_fee = estimate_fee(tx.selected_transfers.size(), fake_outs_count, num_outputs, extra.size(), clsag, bulletproof_plus, base_fee, fee_percent, fixed_fee, fee_quantization_mask);
 
       uint64_t inputs = 0, outputs = 0;
-      for (size_t idx: tx.selected_transfers) inputs += m_transfers[idx].amount();
-      for (const auto &o: tx.dsts) outputs += o.amount;
+      for (size_t idx: tx.selected_transfers)
+        if (m_transfers[idx].m_asset_id == crypto::null_hash) inputs += m_transfers[idx].amount();
+      for (const auto &o: tx.dsts)
+        if (o.asset_id == crypto::null_hash) outputs += o.amount;
 
       if (subtract_fee_from_outputs.empty()) // if normal tx that doesn't subtract fees
       {

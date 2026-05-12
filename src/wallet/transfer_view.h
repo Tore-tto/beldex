@@ -102,6 +102,8 @@ struct transfer_view
   uint64_t checkpointed;                                     // If transfer is backed by atleast 2 Master Node Checkpoints, 0 if it is not, see immutable_height in the daemon rpc call get_info
   bool flash_mempool;                                        // True if this is an approved flash tx in the mempool
   bool was_flash;                                            // True if we saw this as an approved flash (either in the mempool or a recent, uncheckpointed block).  Note that if we didn't see it while an active flash this won't be set.
+  bool is_ca = false;
+  std::string asset_id;
 
   // Not serialized, for internal wallet2 use
   wallet::pay_type pay_type;                                 // @NoBeldexRPCDocGen Internal use only, not serialized

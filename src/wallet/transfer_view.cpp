@@ -34,6 +34,8 @@ KV_SERIALIZE_MAP_CODE_BEGIN(transfer_view)
   KV_SERIALIZE(checkpointed)
   KV_SERIALIZE(flash_mempool)
   KV_SERIALIZE(was_flash)
+  KV_SERIALIZE(is_ca)
+  KV_SERIALIZE(asset_id)
 KV_SERIALIZE_MAP_CODE_END()
 
 }

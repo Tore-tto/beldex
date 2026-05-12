@@ -9011,7 +9011,24 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
         else
           destinations += output.address;
 
-        destinations += ":" + print_money(output.amount);
+        if (output.asset_id.empty() || output.asset_id == tools::type_to_hex(crypto::null_hash))
+          destinations += ":" + print_money(output.amount);
+        else
+        {
+          crypto::hash asset_id;
+          if (!tools::hex_to_type(output.asset_id, asset_id)) asset_id = crypto::null_hash;
+          auto print_as_money = [](uint64_t amount, uint8_t decimals) {
+            std::string s = std::to_string(amount);
+            if (decimals > 0) {
+              if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
+              s.insert(s.length() - decimals, ".");
+            }
+            return s;
+          };
+          std::string ticker = m_wallet->get_asset_ticker(asset_id);
+          uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
+          destinations += ":" + (ticker.empty() ? output.asset_id.substr(0, 8) : ticker) + ":" + print_as_money(output.amount, decimals);
+        }
       }
     }
 
@@ -9020,13 +9037,35 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
     std::transform(transfer.subaddr_indices.begin(), transfer.subaddr_indices.end(), std::back_inserter(subaddr_minors),
         [](const auto& index) { return index.minor; });
 
+    std::string amount_str;
+    if (transfer.is_ca)
+    {
+      crypto::hash asset_id;
+      if (!tools::hex_to_type(transfer.asset_id, asset_id)) asset_id = crypto::null_hash;
+      auto print_as_money = [](uint64_t amount, uint8_t decimals) {
+        std::string s = std::to_string(amount);
+        if (decimals > 0) {
+          if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
+          s.insert(s.length() - decimals, ".");
+        }
+        return s;
+      };
+      std::string ticker = m_wallet->get_asset_ticker(asset_id);
+      uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
+      amount_str = (ticker.empty() ? transfer.asset_id.substr(0, 8) : ticker) + ": " + print_as_money(transfer.amount, decimals);
+    }
+    else
+    {
+      amount_str = print_money(transfer.amount);
+    }
+
     message_writer(color, false) << fmt::format("{:<8.8} {:<6.6} {:<8.8} {:<12.12} {:<16.16} {:<20.20} {:64} {:16} {:<14.14} {} {} - {}"
       , (transfer.type.size() ? transfer.type : (transfer.height == 0 && transfer.flash_mempool) ? "flash" : std::to_string(transfer.height))
       , wallet::pay_type_string(transfer.pay_type)
       , transfer.lock_msg
       , (transfer.checkpointed ? "checkpointed" : transfer.was_flash ? "flash" : "no")
       , tools::get_human_readable_timestamp(transfer.timestamp)
-      , print_money(transfer.amount)
+      , amount_str
       , tools::type_to_hex(transfer.hash)
       , transfer.payment_id
       , print_money(transfer.fee)
@@ -9401,6 +9440,14 @@ bool simple_wallet::ca_get_balances(const std::vector<std::string> &args)
     return true;
   }
 
+  auto print_as_money = [](uint64_t amount, uint8_t decimals) {
+    std::string s = std::to_string(amount);
+    if (decimals > 0) {
+      if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
+      s.insert(s.length() - decimals, ".");
+    }
+    return s;
+  };
   success_msg_writer() << tr("Confidential Asset Balances:");
   for (const auto& [asset_id, amount] : balances)
   {
@@ -9412,14 +9459,6 @@ bool simple_wallet::ca_get_balances(const std::vector<std::string> &args)
     {
       std::string ticker = m_wallet->get_asset_ticker(asset_id);
       uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
-      auto print_as_money = [](uint64_t amount, uint8_t decimals) {
-        std::string s = std::to_string(amount);
-        if (decimals == 0) return s;
-        if (s.size() <= decimals)
-          s.insert(0, decimals - s.size() + 1, '0');
-        s.insert(s.size() - decimals, ".");
-        return s;
-      };
       success_msg_writer() << "  Asset " << (ticker.empty() ? tools::type_to_hex(asset_id) : ticker + " (" + tools::type_to_hex(asset_id).substr(0,8) + "...)") << ": " << print_as_money(amount, decimals);
     }
   }
@@ -9595,6 +9634,7 @@ bool simple_wallet::ca_list_assets(const std::vector<std::string> &args)
   };
 
   success_msg_writer() << tr("Registered Confidential Assets:");
+
   for (const auto& a : assets)
   {
     success_msg_writer() << "  Asset ID: " << a.asset_id << " (" << a.descriptor.ticker << ")";
