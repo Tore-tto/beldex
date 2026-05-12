@@ -1858,6 +1858,8 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   entry.index               = tx_scan_info.received->index;
   entry.amount              = tx_scan_info.money_transfered;
   entry.unlock_time         = unlock_time;
+  entry.asset_id            = tx_scan_info.asset_id;
+  entry.is_ca               = tx_scan_info.is_ca;
 
   if (cryptonote::is_coinbase(tx))
   {
@@ -2433,7 +2435,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
       {
         amount = td.amount();
       }
-      tx_money_spent_in_ins += amount;
+      if (!td.is_ca())
+        tx_money_spent_in_ins += amount;
       if (subaddr_account && *subaddr_account != td.m_subaddr_index.major)
         LOG_ERROR("spent funds are from different subaddress accounts; count of incoming/outgoing payments will be incorrect");
       subaddr_account = td.m_subaddr_index.major;
@@ -2591,6 +2594,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
       payment.m_type          = i.type;
       payment.m_unmined_flash = pool && flash;
       payment.m_was_flash     = flash;
+      payment.m_asset_id      = i.asset_id;
+      payment.m_is_ca         = i.is_ca;
       if (pool && !flash) {
         if (emplace_or_replace(m_unconfirmed_payments, payment_id, pool_payment_details{payment, double_spend_seen}))
           all_same = false;
@@ -6264,7 +6269,17 @@ void wallet2::get_transfers(wallet2::transfer_container& incoming_transfers) con
   incoming_transfers = m_transfers;
 }
 //------------------------------------------------------------------------------------------------------------------------------
-static void set_confirmations(wallet::transfer_view &entry, uint64_t blockchain_height, uint64_t block_reward)
+  static std::string print_as_money(uint64_t amount, uint8_t decimals)
+  {
+    std::string s = std::to_string(amount);
+    if (decimals == 0) return s;
+    if (s.size() <= decimals)
+      s.insert(0, decimals - s.size() + 1, '0');
+    s.insert(s.size() - decimals, ".");
+    return s;
+  }
+
+  static void set_confirmations(wallet::transfer_view &entry, uint64_t blockchain_height, uint64_t block_reward)
 {
   if (entry.height >= blockchain_height || (entry.height == 0 && (entry.flash_mempool || entry.type == "pending" || entry.type == "pool")))
     entry.confirmations = 0;
@@ -6291,6 +6306,12 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
   result.unlock_time = pd.m_unlock_time;
   result.fee = pd.m_fee;
   result.note = get_tx_note(pd.m_tx_hash);
+  if (pd.m_is_ca) {
+    std::string ticker = get_asset_ticker(pd.m_asset_id);
+    auto it = m_asset_cache.find(pd.m_asset_id);
+    uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+    result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(pd.m_asset_id) : ticker + " (" + tools::type_to_hex(pd.m_asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(pd.m_amount, decimals) + "]";
+  }
   result.pay_type = pd.m_type;
   result.subaddr_index = pd.m_subaddr_index;
   result.subaddr_indices.push_back(pd.m_subaddr_index);
@@ -6323,6 +6344,15 @@ wallet::transfer_view wallet2::wallet2::make_transfer_view(const crypto::hash &t
   uint64_t change = pd.m_change == (uint64_t)-1 ? 0 : pd.m_change; // change may not be known
   result.amount = pd.m_amount_in - change - result.fee;
   result.note = get_tx_note(txid);
+  for (const auto &d: pd.m_dests) {
+    if (d.asset_id != crypto::null_hash) {
+      std::string ticker = get_asset_ticker(d.asset_id);
+      auto it = m_asset_cache.find(d.asset_id);
+      uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+      result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(d.asset_id) : ticker + " (" + tools::type_to_hex(d.asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(d.amount, decimals) + "]";
+      break;
+    }
+  }
 
   for (const auto &d: pd.m_dests) {
     result.destinations.push_back({});
@@ -6359,6 +6389,15 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
   result.unlock_time = pd.m_tx.unlock_time;
   result.locked = true;
   result.note = get_tx_note(txid);
+  for (const auto &d: pd.m_dests) {
+    if (d.asset_id != crypto::null_hash) {
+      std::string ticker = get_asset_ticker(d.asset_id);
+      auto it = m_asset_cache.find(d.asset_id);
+      uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+      result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(d.asset_id) : ticker + " (" + tools::type_to_hex(d.asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(d.amount, decimals) + "]";
+      break;
+    }
+  }
 
   for (const auto &d: pd.m_dests) {
     result.destinations.push_back({});
@@ -6393,6 +6432,12 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &payment_id
   result.locked = true;
   result.fee = pd.m_fee;
   result.note = get_tx_note(pd.m_tx_hash);
+  if (pd.m_is_ca) {
+    std::string ticker = get_asset_ticker(pd.m_asset_id);
+    auto it = m_asset_cache.find(pd.m_asset_id);
+    uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+    result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(pd.m_asset_id) : ticker + " (" + tools::type_to_hex(pd.m_asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(pd.m_amount, decimals) + "]";
+  }
   result.double_spend_seen = ppd.m_double_spend_seen;
   result.pay_type = wallet::pay_type::unspecified;
   result.type = "pool";
@@ -15602,4 +15647,61 @@ bool wallet2::ca_get_asset_list(std::vector<cryptonote::rpc::GET_ASSET_LIST::ent
 {
   return m_node_rpc_proxy.get_asset_list(assets);
 }
+
+std::string wallet2::get_asset_ticker(const crypto::hash& asset_id) const
+{
+  auto it = m_asset_cache.find(asset_id);
+  if (it != m_asset_cache.end())
+    return it->second.ticker;
+
+  std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> assets;
+  if (ca_get_asset_list(assets))
+  {
+    auto* nc_this = const_cast<wallet2*>(this);
+    for (const auto& a : assets) {
+      crypto::hash hash_id;
+      if (tools::hex_to_type(a.asset_id, hash_id)) {
+        asset_info info;
+        info.ticker = a.descriptor.ticker;
+        info.decimals = a.descriptor.decimal_point;
+        nc_this->m_asset_cache[hash_id] = info;
+      }
+    }
+  }
+
+  it = m_asset_cache.find(asset_id);
+  if (it != m_asset_cache.end())
+    return it->second.ticker;
+
+  return "";
+}
+
+uint8_t wallet2::get_asset_decimals(const crypto::hash& asset_id) const
+{
+  auto it = m_asset_cache.find(asset_id);
+  if (it != m_asset_cache.end())
+    return it->second.decimals;
+
+  std::vector<cryptonote::rpc::GET_ASSET_LIST::entry> assets;
+  if (ca_get_asset_list(assets))
+  {
+    auto* nc_this = const_cast<wallet2*>(this);
+    for (const auto& a : assets) {
+      crypto::hash hash_id;
+      if (tools::hex_to_type(a.asset_id, hash_id)) {
+        asset_info info;
+        info.ticker = a.descriptor.ticker;
+        info.decimals = a.descriptor.decimal_point;
+        nc_this->m_asset_cache[hash_id] = info;
+      }
+    }
+  }
+
+  it = m_asset_cache.find(asset_id);
+  if (it != m_asset_cache.end())
+    return it->second.decimals;
+
+  return 0;
+}
+
 }

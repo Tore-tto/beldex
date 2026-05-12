@@ -40,10 +40,12 @@ struct transfer_destination
 {
   std::string address; // Destination public address.
   uint64_t amount;     // Amount to send to each destination, in atomic units.
+  std::string asset_id; // identifies the asset (empty for BDX)
 
   BEGIN_KV_SERIALIZE_MAP()
     KV_SERIALIZE(amount)
     KV_SERIALIZE(address)
+    KV_SERIALIZE(asset_id)
   END_KV_SERIALIZE_MAP()
 };
 

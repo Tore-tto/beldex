@@ -187,6 +187,8 @@ private:
     wallet::pay_type type;
     uint64_t amount;
     uint64_t unlock_time;
+    crypto::hash asset_id;
+    bool is_ca;
   };
 
   class hashchain
@@ -331,6 +333,8 @@ private:
       cryptonote::subaddress_index m_subaddr_index;
       bool m_unmined_flash;
       bool m_was_flash;
+      crypto::hash m_asset_id = crypto::null_hash;
+      bool m_is_ca = false;
 
       bool is_coinbase() const { return ((m_type == wallet::pay_type::miner) || (m_type == wallet::pay_type::master_node) || (m_type == wallet::pay_type::governance)); }
     };
@@ -844,12 +848,19 @@ private:
       std::string hashed_name;
     };
     std::unordered_map<std::string, bns_detail> bns_records_cache;
+    struct asset_info {
+      std::string ticker;
+      uint8_t decimals;
+    };
+    mutable std::unordered_map<crypto::hash, asset_info> m_asset_cache;
 
     void set_bns_cache_record(wallet2::bns_detail detail);
 
     void delete_bns_cache_record(const std::string& name);
 
     std::unordered_map<std::string, bns_detail> get_bns_cache();
+    std::string get_asset_ticker(const crypto::hash& asset_id) const;
+    uint8_t get_asset_decimals(const crypto::hash& asset_id) const;
 
     //Returns the current height up to which the wallet has synchronized the blockchain.  Thread
     // safe (though the value may be behind if another thread is in the middle of adding blocks).
@@ -1724,7 +1735,7 @@ private:
 
 }
 BOOST_CLASS_VERSION(tools::wallet2, 30)
-BOOST_CLASS_VERSION(tools::wallet2::payment_details, 6)
+BOOST_CLASS_VERSION(tools::wallet2::payment_details, 7)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 9)
 BOOST_CLASS_VERSION(tools::wallet2::confirmed_transfer_details, 8)
@@ -1864,21 +1875,6 @@ namespace boost::serialization
       a & x.m_block_height;
       a & x.m_unlock_time;
 
-      // Set defaults for old versions:
-      if (ver < 1)
-        x.m_timestamp = 0;
-      if (ver < 2)
-        x.m_subaddr_index = {};
-      if (ver < 3)
-        x.m_fee = 0;
-      if (ver < 4)
-        x.m_type = wallet::pay_type::in;
-      if (ver < 5)
-        x.m_unmined_flash = false;
-      if (ver < 6)
-        x.m_was_flash = false;
-
-
       if (ver < 1) return;
       a & x.m_timestamp;
       if (ver < 2) return;
@@ -1891,6 +1887,9 @@ namespace boost::serialization
       a & x.m_unmined_flash;
       if (ver < 6) return;
       a & x.m_was_flash;
+      if (ver < 7) return;
+      a & x.m_asset_id;
+      a & x.m_is_ca;
     }
 
     template <class Archive>

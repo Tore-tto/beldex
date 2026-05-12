@@ -9410,7 +9410,17 @@ bool simple_wallet::ca_get_balances(const std::vector<std::string> &args)
     }
     else
     {
-      success_msg_writer() << "  Asset " << tools::type_to_hex(asset_id) << ": " << amount;
+      std::string ticker = m_wallet->get_asset_ticker(asset_id);
+      uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
+      auto print_as_money = [](uint64_t amount, uint8_t decimals) {
+        std::string s = std::to_string(amount);
+        if (decimals == 0) return s;
+        if (s.size() <= decimals)
+          s.insert(0, decimals - s.size() + 1, '0');
+        s.insert(s.size() - decimals, ".");
+        return s;
+      };
+      success_msg_writer() << "  Asset " << (ticker.empty() ? tools::type_to_hex(asset_id) : ticker + " (" + tools::type_to_hex(asset_id).substr(0,8) + "...)") << ": " << print_as_money(amount, decimals);
     }
   }
   return true;
@@ -9575,14 +9585,24 @@ bool simple_wallet::ca_list_assets(const std::vector<std::string> &args)
     return true;
   }
 
+  auto print_as_money = [](uint64_t amount, uint8_t decimals) {
+    std::string s = std::to_string(amount);
+    if (decimals == 0) return s;
+    if (s.size() <= decimals)
+      s.insert(0, decimals - s.size() + 1, '0');
+    s.insert(s.size() - decimals, ".");
+    return s;
+  };
+
   success_msg_writer() << tr("Registered Confidential Assets:");
   for (const auto& a : assets)
   {
-    success_msg_writer() << "  Asset ID: " << a.asset_id;
+    success_msg_writer() << "  Asset ID: " << a.asset_id << " (" << a.descriptor.ticker << ")";
     success_msg_writer() << "    Full Name: " << a.descriptor.full_name;
     success_msg_writer() << "    Ticker:    " << a.descriptor.ticker;
     success_msg_writer() << "    Decimals:  " << (uint32_t)a.descriptor.decimal_point;
-    success_msg_writer() << "    Max Supply: " << a.descriptor.total_max_supply;
+    success_msg_writer() << "    Max Supply: " << print_as_money(a.descriptor.total_max_supply, a.descriptor.decimal_point);
+    success_msg_writer() << "    Current Supply: " << print_as_money(a.descriptor.current_supply, a.descriptor.decimal_point);
     success_msg_writer() << "    Owner:     " << a.descriptor.owner;
     success_msg_writer() << "";
   }
