@@ -98,6 +98,20 @@ extern "C"
 
 using namespace crypto;
 using namespace cryptonote;
+ 
+ namespace cryptonote
+ {
+   bool is_asset_emission(const transaction& tx)
+   {
+     std::vector<tx_extra_field> tx_extra_fields;
+     if (!parse_tx_extra(tx.extra, tx_extra_fields))
+       return false;
+     tx_extra_asset_registration asset_reg;
+     if (find_tx_extra_field_by_type(tx_extra_fields, asset_reg))
+       return (asset_reg.op_type == cryptonote::asset_operation_type::EMIT);
+     return false;
+   }
+ }
 
 namespace string_tools = epee::string_tools;
 
@@ -1858,8 +1872,9 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   entry.index               = tx_scan_info.received->index;
   entry.amount              = tx_scan_info.money_transfered;
   entry.unlock_time         = unlock_time;
-  entry.asset_id            = tx_scan_info.asset_id;
   entry.is_ca               = tx_scan_info.is_ca;
+  entry.is_emission         = tx_scan_info.is_ca && cryptonote::is_asset_emission(tx);
+  entry.asset_id            = tx_scan_info.asset_id;
 
   if (cryptonote::is_coinbase(tx))
   {
@@ -2596,6 +2611,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
       payment.m_was_flash     = flash;
       payment.m_asset_id      = i.asset_id;
       payment.m_is_ca         = i.is_ca;
+      payment.m_is_emission   = i.is_emission;
       if (pool && !flash) {
         if (emplace_or_replace(m_unconfirmed_payments, payment_id, pool_payment_details{payment, double_spend_seen}))
           all_same = false;
@@ -6307,6 +6323,7 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
   result.fee = pd.m_fee;
   result.note = get_tx_note(pd.m_tx_hash);
   result.is_ca = pd.m_is_ca;
+  result.is_emission = pd.m_is_emission;
   result.asset_id = tools::type_to_hex(pd.m_asset_id);
   if (pd.m_is_ca) {
     std::string ticker = get_asset_ticker(pd.m_asset_id);
@@ -6346,6 +6363,15 @@ wallet::transfer_view wallet2::wallet2::make_transfer_view(const crypto::hash &t
   uint64_t change = pd.m_change == (uint64_t)-1 ? 0 : pd.m_change; // change may not be known
   result.amount = pd.m_amount_in - change - result.fee;
   result.note = get_tx_note(txid);
+  result.is_ca = pd.m_is_ca;
+  result.is_emission = pd.m_is_emission;
+  result.asset_id = tools::type_to_hex(pd.m_asset_id);
+  if (pd.m_is_ca) {
+    std::string ticker = get_asset_ticker(pd.m_asset_id);
+    auto it = m_asset_cache.find(pd.m_asset_id);
+    uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+    result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(pd.m_asset_id) : ticker + " (" + tools::type_to_hex(pd.m_asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(pd.m_amount_in - change - result.fee, decimals) + "]";
+  }
   for (const auto &d: pd.m_dests) {
     if (d.asset_id != crypto::null_hash) {
       std::string ticker = get_asset_ticker(d.asset_id);
@@ -6396,6 +6422,15 @@ wallet::transfer_view wallet2::make_transfer_view(const crypto::hash &txid, cons
   result.unlock_time = pd.m_tx.unlock_time;
   result.locked = true;
   result.note = get_tx_note(txid);
+  result.is_ca = pd.m_is_ca;
+  result.is_emission = pd.m_is_emission;
+  result.asset_id = tools::type_to_hex(pd.m_asset_id);
+  if (pd.m_is_ca) {
+    std::string ticker = get_asset_ticker(pd.m_asset_id);
+    auto it = m_asset_cache.find(pd.m_asset_id);
+    uint8_t decimals = (it != m_asset_cache.end()) ? it->second.decimals : 0;
+    result.note += " [Asset: " + (ticker.empty() ? tools::type_to_hex(pd.m_asset_id) : ticker + " (" + tools::type_to_hex(pd.m_asset_id).substr(0,8) + "...)") + " Amount: " + print_as_money(pd.m_amount_in - pd.m_change - result.fee, decimals) + "]";
+  }
   for (const auto &d: pd.m_dests) {
     if (d.asset_id != crypto::null_hash) {
       std::string ticker = get_asset_ticker(d.asset_id);
@@ -7058,6 +7093,15 @@ void wallet2::add_unconfirmed_tx(const cryptonote::transaction& tx, uint64_t amo
   utd.m_subaddr_account = subaddr_account;
   utd.m_subaddr_indices = subaddr_indices;
   utd.m_pay_type = wallet::pay_type_from_tx(tx);
+  utd.m_is_ca = false;
+  utd.m_is_emission = cryptonote::is_asset_emission(tx);
+  for (const auto &d: dests) {
+    if (d.asset_id != crypto::null_hash) {
+      utd.m_is_ca = true;
+      utd.m_asset_id = d.asset_id;
+      break;
+    }
+  }
   for (const auto &in: tx.vin)
   {
     if (!std::holds_alternative<cryptonote::txin_to_key>(in))

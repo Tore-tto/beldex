@@ -189,6 +189,7 @@ private:
     uint64_t unlock_time;
     crypto::hash asset_id;
     bool is_ca;
+    bool is_emission;
   };
 
   class hashchain
@@ -335,6 +336,7 @@ private:
       bool m_was_flash;
       crypto::hash m_asset_id = crypto::null_hash;
       bool m_is_ca = false;
+      bool m_is_emission = false;
 
       bool is_coinbase() const { return ((m_type == wallet::pay_type::miner) || (m_type == wallet::pay_type::master_node) || (m_type == wallet::pay_type::governance)); }
     };
@@ -366,6 +368,9 @@ private:
       std::set<uint32_t> m_subaddr_indices;  // set of address indices used as inputs in this transfer
       std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> m_rings; // relative
       wallet::pay_type m_pay_type = wallet::pay_type::out;
+      bool m_is_ca = false;
+      bool m_is_emission = false;
+      crypto::hash m_asset_id = crypto::null_hash;
     };
 
     struct confirmed_transfer_details
@@ -383,6 +388,9 @@ private:
       std::set<uint32_t> m_subaddr_indices;  // set of address indices used as inputs in this transfer
       std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> m_rings; // relative
       wallet::pay_type m_pay_type = wallet::pay_type::out;
+      bool m_is_ca = false;
+      bool m_is_emission = false;
+      crypto::hash m_asset_id = crypto::null_hash;
 
       confirmed_transfer_details(): m_amount_in(0), m_amount_out(0), m_change((uint64_t)-1), m_block_height(0), m_payment_id(crypto::null_hash), m_timestamp(0), m_unlock_time(0), m_subaddr_account((uint32_t)-1) {}
       confirmed_transfer_details(const unconfirmed_transfer_details &utd, uint64_t height)
@@ -399,6 +407,9 @@ private:
       , m_subaddr_indices(utd.m_subaddr_indices)
       , m_rings(utd.m_rings)
       , m_pay_type(utd.m_pay_type)
+      , m_is_ca(utd.m_is_ca)
+      , m_is_emission(utd.m_is_emission)
+      , m_asset_id(utd.m_asset_id)
       {
       }
     };

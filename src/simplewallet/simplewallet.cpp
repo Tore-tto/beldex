@@ -96,6 +96,20 @@ using namespace cryptonote;
 namespace po = boost::program_options;
 namespace string_tools = epee::string_tools;
 using sw = cryptonote::simple_wallet;
+ 
+ namespace
+ {
+   std::string print_as_money(uint64_t amount, uint8_t decimals)
+   {
+     std::string s = std::to_string(amount);
+     if (decimals > 0)
+     {
+       if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
+       s.insert(s.length() - decimals, ".");
+     }
+     return s;
+   }
+ }
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "wallet.simplewallet"
@@ -5284,7 +5298,7 @@ bool simple_wallet::show_incoming_transfers(const std::vector<std::string>& args
         extra_string += std::string("\n    ") + tr("Used at heights: ") + line.first + "\n    " + line.second;
       }
       message_writer(td.m_spent ? epee::console_color_magenta : epee::console_color_green, false) << boost::format("%21s%8s%12s%8s%16u%68s%8u%s") %
-                                                                                                         print_money(td.amount()) %
+                                                                                                         (td.m_is_ca ? (m_wallet->get_asset_ticker(td.m_asset_id).empty() ? tools::type_to_hex(td.m_asset_id).substr(0,8) : m_wallet->get_asset_ticker(td.m_asset_id)) + ": " + print_as_money(td.amount(), m_wallet->get_asset_decimals(td.m_asset_id)) : print_money(td.amount())) %
                                                                                                          (td.m_spent ? tr("T") : tr("F")) %
                                                                                                          (m_wallet->frozen(td) ? tr("[frozen]") : m_wallet->is_transfer_unlocked(td) ? tr("unlocked")
                                                                                                                                                                                      : tr("locked")) %
@@ -9017,14 +9031,6 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
         {
           crypto::hash asset_id;
           if (!tools::hex_to_type(output.asset_id, asset_id)) asset_id = crypto::null_hash;
-          auto print_as_money = [](uint64_t amount, uint8_t decimals) {
-            std::string s = std::to_string(amount);
-            if (decimals > 0) {
-              if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
-              s.insert(s.length() - decimals, ".");
-            }
-            return s;
-          };
           std::string ticker = m_wallet->get_asset_ticker(asset_id);
           uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
           destinations += ":" + (ticker.empty() ? output.asset_id.substr(0, 8) : ticker) + ":" + print_as_money(output.amount, decimals);
@@ -9042,14 +9048,6 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
     {
       crypto::hash asset_id;
       if (!tools::hex_to_type(transfer.asset_id, asset_id)) asset_id = crypto::null_hash;
-      auto print_as_money = [](uint64_t amount, uint8_t decimals) {
-        std::string s = std::to_string(amount);
-        if (decimals > 0) {
-          if (s.length() <= decimals) s.insert(0, decimals - s.length() + 1, '0');
-          s.insert(s.length() - decimals, ".");
-        }
-        return s;
-      };
       std::string ticker = m_wallet->get_asset_ticker(asset_id);
       uint8_t decimals = m_wallet->get_asset_decimals(asset_id);
       amount_str = (ticker.empty() ? transfer.asset_id.substr(0, 8) : ticker) + ": " + print_as_money(transfer.amount, decimals);
@@ -9061,7 +9059,7 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
 
     message_writer(color, false) << fmt::format("{:<8.8} {:<6.6} {:<8.8} {:<12.12} {:<16.16} {:<20.20} {:64} {:16} {:<14.14} {} {} - {}"
       , (transfer.type.size() ? transfer.type : (transfer.height == 0 && transfer.flash_mempool) ? "flash" : std::to_string(transfer.height))
-      , wallet::pay_type_string(transfer.pay_type)
+      , (transfer.is_emission ? tr("in") : wallet::pay_type_string(transfer.pay_type))
       , transfer.lock_msg
       , (transfer.checkpointed ? "checkpointed" : transfer.was_flash ? "flash" : "no")
       , tools::get_human_readable_timestamp(transfer.timestamp)

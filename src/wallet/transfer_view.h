@@ -103,6 +103,7 @@ struct transfer_view
   bool flash_mempool;                                        // True if this is an approved flash tx in the mempool
   bool was_flash;                                            // True if we saw this as an approved flash (either in the mempool or a recent, uncheckpointed block).  Note that if we didn't see it while an active flash this won't be set.
   bool is_ca = false;
+  bool is_emission = false;
   std::string asset_id;
 
   // Not serialized, for internal wallet2 use
