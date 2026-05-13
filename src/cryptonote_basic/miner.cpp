@@ -116,6 +116,25 @@ namespace cryptonote
       return true;
     });
 
+    m_update_hashrate_interval.do_call([&](){
+      if(is_mining())
+      {
+        std::unique_lock lock{m_hashrate_mutex};
+        auto now = std::chrono::steady_clock::now();
+        if (m_last_hr_update)
+        {
+          auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - *m_last_hr_update).count();
+          if (duration > 0)
+          {
+            m_current_hash_rate = static_cast<double>(m_hashes) / duration;
+            m_hashes = 0;
+          }
+        }
+        m_last_hr_update = now;
+      }
+      return true;
+    });
+
     return true;
   }
   //-----------------------------------------------------------------------------------------------------
@@ -143,6 +162,7 @@ namespace cryptonote
         m_threads_total = command_line::get_arg(vm, arg_mining_threads);
       }
     }
+    m_nettype = nettype;
 
     return true;
   }
@@ -289,7 +309,7 @@ namespace cryptonote
 
     while(!m_stop)
     {
-      if(m_pausers_count)//anti split workaround
+      if(m_pausers_count && m_nettype == network_type::MAINNET)//anti split workaround
       {
         std::this_thread::sleep_for(100ms);
         continue;

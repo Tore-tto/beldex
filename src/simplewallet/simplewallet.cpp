@@ -217,8 +217,8 @@ namespace
   std::string print_asset_amount(uint64_t amount, uint8_t decimal_point, bool strip_zeros = true)
   {
     std::string s = std::to_string(amount);
-    if (s.size() < decimal_point + 1)
-      s.insert(0, decimal_point + 1 - s.size(), '0');
+    if (s.size() < static_cast<size_t>(decimal_point) + 1)
+      s.insert(0, static_cast<size_t>(decimal_point) + 1 - s.size(), '0');
 
     if (decimal_point > 0)
       s.insert(s.size() - decimal_point, ".");
