@@ -10437,21 +10437,74 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     }
   }
 
-  // ── HF21: asset ownership proof for emit_asset ──────────────────────────
+  // ── HF21: asset ownership proof and balance proof for emit_asset ────────
   if (tx_params.tx_type == txtype::emit_asset)
   {
     crypto::hash prefix_hash;
     get_transaction_prefix_hash(tx, prefix_hash);
 
-    // For now, we assume the owner is the primary spend key of this wallet.
-    // In a more complete implementation, the caller would specify which subaddress is the owner.
+    // 1. Generate ZC balance proof
+    rct::key sum_masks = rct::zero();
+    uint64_t sum_amounts = 0;
+
+    size_t num_stdaddresses = 0;
+    size_t num_subaddresses = 0;
+    for (const auto& d : splitted_dsts)
+    {
+      if (d.is_subaddress)
+        num_subaddresses++;
+      else
+        num_stdaddresses++;
+    }
+    if (change_dts.amount > 0)
+    {
+      if (change_dts.is_subaddress)
+        num_subaddresses++;
+      else
+        num_stdaddresses++;
+    }
+    bool need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
+
+    for (size_t out_idx = 0; out_idx < splitted_dsts.size(); ++out_idx)
+    {
+      const auto& dst_entr = splitted_dsts[out_idx];
+      if (!dst_entr.is_zarcanum())
+        continue;
+
+      crypto::key_derivation derivation{};
+      const crypto::secret_key& sec_key = (need_additional_txkeys && out_idx < additional_tx_keys.size()) ? additional_tx_keys[out_idx] : tx_key;
+
+      if (!m_account.get_device().generate_key_derivation(dst_entr.addr.m_view_public_key, sec_key, derivation))
+      {
+        THROW_WALLET_EXCEPTION(error::wallet_internal_error, "Failed to generate key derivation for balance proof");
+      }
+
+      rct::key mask = cryptonote::zarcanum_derivation_to_scalar(derivation, out_idx, "amount_mask");
+      sc_add(sum_masks.bytes, sum_masks.bytes, mask.bytes);
+      sum_amounts += dst_entr.amount;
+    }
+
+    rct::key P = rct::zero();
+    rct::key sum_masks_G = rct::scalarmultBase(sum_masks);
+    rct::key sum_amounts_X = rct::scalarmultX(rct::d2h(sum_amounts));
+    rct::addKeys(P, sum_masks_G, sum_amounts_X);
+
+    rct::zc_balance_proof balance_proof{};
+    if (!crypto::generate_linear_composition_proof(rct::hash2rct(prefix_hash), P, sum_masks, rct::d2h(sum_amounts), balance_proof.lcp))
+    {
+      THROW_WALLET_EXCEPTION(error::wallet_internal_error, "Failed to generate linear composition proof for balance");
+    }
+    tx.asset_proofs.push_back(std::move(balance_proof));
+    MINFO("Attached ZC balance proof for emit_asset tx");
+
+    // 2. Generate asset ownership proof
     const auto& keys = m_account.get_keys();
-    rct::asset_operation_ownership_proof proof{};
-    if (!crypto::generate_schnorr_sig(rct::hash2rct(prefix_hash), rct::pk2rct(keys.m_account_address.m_spend_public_key), rct::sk2rct(keys.m_spend_secret_key), proof.sig))
+    rct::asset_operation_ownership_proof ownership_proof{};
+    if (!crypto::generate_schnorr_sig(rct::hash2rct(prefix_hash), rct::pk2rct(keys.m_account_address.m_spend_public_key), rct::sk2rct(keys.m_spend_secret_key), ownership_proof.sig))
     {
       THROW_WALLET_EXCEPTION(error::wallet_internal_error, "Failed to generate asset ownership proof");
     }
-    tx.asset_proofs.push_back(std::move(proof));
+    tx.asset_proofs.push_back(std::move(ownership_proof));
     MINFO("Attached ownership proof for emit_asset tx: " << get_transaction_hash(tx));
   }
 
@@ -10580,7 +10633,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1 && !td.is_zarcanum())
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -10600,7 +10653,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1 && !td.is_zarcanum())
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -10616,7 +10669,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
           MDEBUG("Ignoring output " << j << " of amount " << print_money(td2.amount()) << " which is outside prescribed range [" << print_money(m_ignore_outputs_below) << ", " << print_money(m_ignore_outputs_above) << "]");
           continue;
         }
-        if (!is_spent(td2, false) && !td2.m_frozen && !td.m_key_image_partial && td2.is_rct() && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index)
+        if (!is_spent(td2, false) && !td2.m_frozen && !td.m_key_image_partial && td2.is_rct() && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index && !td2.is_zarcanum())
         {
           // update our picks if those outputs are less related than any we
           // already found. If the same, don't update, and oldest suitable outputs
@@ -11547,7 +11600,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1 && !td.is_zarcanum())
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
