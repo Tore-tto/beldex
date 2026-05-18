@@ -925,7 +925,7 @@ namespace cryptonote
 
       tx.vout.push_back(out);
       output_index++;
-      if(tx.type != txtype::deploy_new_asset)
+      if(tx.type != txtype::deploy_new_asset && tx.type != txtype::emit_asset)
         summary_outs_money += dst_entr.amount;
     }
     CHECK_AND_ASSERT_MES(additional_tx_public_keys.size() == additional_tx_keys.size(), false, "Internal error creating additional public keys");

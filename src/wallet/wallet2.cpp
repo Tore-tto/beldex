@@ -77,6 +77,7 @@
 #include "common/perf_timer.h"
 #include "common/hex.h"
 #include "ringct/rctSigs.h"
+#include "crypto/asset_proofs.h"
 #include "ringdb.h"
 #include "device/device_cold.hpp"
 #ifdef DEVICE_TREZOR_READY
@@ -10154,7 +10155,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
 
   // calculate total amount being sent to all destinations
   // throw if total amount overflows uint64_t
-  if(!(tx_params.tx_type == txtype::deploy_new_asset))
+  if(!(tx_params.tx_type == txtype::deploy_new_asset || tx_params.tx_type == txtype::emit_asset))
   {
     for(auto& dt: dsts)
     {
@@ -10434,6 +10435,24 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
 
       tx.asset_proofs.push_back(std::move(zc_sig));
     }
+  }
+
+  // ── HF21: asset ownership proof for emit_asset ──────────────────────────
+  if (tx_params.tx_type == txtype::emit_asset)
+  {
+    crypto::hash prefix_hash;
+    get_transaction_prefix_hash(tx, prefix_hash);
+
+    // For now, we assume the owner is the primary spend key of this wallet.
+    // In a more complete implementation, the caller would specify which subaddress is the owner.
+    const auto& keys = m_account.get_keys();
+    rct::asset_operation_ownership_proof proof{};
+    if (!crypto::generate_schnorr_sig(rct::hash2rct(prefix_hash), rct::pk2rct(keys.m_account_address.m_spend_public_key), rct::sk2rct(keys.m_spend_secret_key), proof.sig))
+    {
+      THROW_WALLET_EXCEPTION(error::wallet_internal_error, "Failed to generate asset ownership proof");
+    }
+    tx.asset_proofs.push_back(std::move(proof));
+    MINFO("Attached ownership proof for emit_asset tx: " << get_transaction_hash(tx));
   }
 
   // work out the permutation done on sources
@@ -11217,6 +11236,53 @@ std::vector<wallet2::pending_tx> wallet2::create_asset_deploy_tx(
                                subaddr_indices, tx_params);
 }
 
+std::vector<wallet2::pending_tx> wallet2::create_asset_emit_tx(
+    std::vector<cryptonote::tx_destination_entry> dsts,
+    const crypto::public_key& asset_id,
+    const size_t fake_outs_count,
+    uint32_t priority,
+    const std::vector<uint8_t>& extra,
+    uint32_t subaddr_account,
+    std::set<uint32_t> subaddr_indices)
+{
+  // Count how many ZC outputs are in the caller-supplied destinations.
+  size_t zc_count = 0;
+  for (const auto& d : dsts)
+    if (d.is_zarcanum()) ++zc_count;
+
+  // Pad with zero-value self-sends until we reach the minimum.
+  if (zc_count < cryptonote::MIN_ASSET_EMISSION_OUTPUTS)
+  {
+    const cryptonote::account_public_address self_addr =
+        m_account.get_keys().m_account_address;
+    const size_t needed = cryptonote::MIN_ASSET_EMISSION_OUTPUTS - zc_count;
+
+    for (size_t i = 0; i < needed; ++i)
+    {
+      cryptonote::tx_destination_entry dummy;
+      dummy.addr         = self_addr;
+      dummy.amount       = 0;
+      dummy.is_subaddress = false;
+      dummy.asset_id     = asset_id;
+      dsts.push_back(dummy);
+    }
+
+    MINFO("create_asset_emit_tx: added " << needed
+          << " self-send outputs to reach MIN_ASSET_EMISSION_OUTPUTS ("
+          << cryptonote::MIN_ASSET_EMISSION_OUTPUTS << ")");
+  }
+
+  auto hf_ver = get_hard_fork_version();
+  THROW_WALLET_EXCEPTION_IF(!hf_ver, error::wallet_internal_error,
+      "Failed to get hard fork version from daemon");
+  beldex_construct_tx_params tx_params = wallet2::construct_params(
+      *hf_ver, txtype::emit_asset, priority);
+
+  return create_transactions_2(dsts, fake_outs_count, 0 /*unlock_time*/,
+                               priority, extra, subaddr_account,
+                               subaddr_indices, tx_params);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count, const uint64_t unlock_time, uint32_t priority, const std::vector<uint8_t>& extra_base, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices, beldex_construct_tx_params &tx_params, const unique_index_container& subtract_fee_from_outputs)
@@ -11253,6 +11319,12 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
     LOG_PRINT_L0("is_asset_register_tx:" << is_asset_register_tx);
   if (is_asset_register_tx)  {
     THROW_WALLET_EXCEPTION_IF(dsts.size() != cryptonote::MIN_ASSET_EMISSION_OUTPUTS, error::wallet_internal_error, "Asset register txs must have exactly " + std::to_string(cryptonote::MIN_ASSET_EMISSION_OUTPUTS) + " destinations set, has: " + std::to_string(dsts.size()));
+  }
+
+  bool const is_asset_emit_tx = (tx_params.tx_type == txtype::emit_asset);
+  LOG_PRINT_L0("is_asset_emit_tx:" << is_asset_emit_tx);
+  if (is_asset_emit_tx)  {
+    THROW_WALLET_EXCEPTION_IF(dsts.size() != cryptonote::MIN_ASSET_EMISSION_OUTPUTS, error::wallet_internal_error, "Asset emit txs must have exactly " + std::to_string(cryptonote::MIN_ASSET_EMISSION_OUTPUTS) + " destinations set, has: " + std::to_string(dsts.size()));
   }
 
   if(m_light_wallet) {
@@ -11403,7 +11475,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   // throw if total amount overflows uint64_t
   needed_money = 0;
   token_needed_money = 0;
-  if(is_asset_register_tx)
+  if(is_asset_register_tx || is_asset_emit_tx)
   {
     for(auto& dt: dsts)
     {
@@ -11423,7 +11495,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
 
   // need money should be zero for the is_asset_register_tx
   // throw if attempting a transaction with no money
-  THROW_WALLET_EXCEPTION_IF(needed_money == 0 && !(is_bns_tx || is_burn_tx|| is_asset_register_tx), error::zero_destination);
+  THROW_WALLET_EXCEPTION_IF(needed_money == 0 && !(is_bns_tx || is_burn_tx|| is_asset_register_tx || is_asset_emit_tx), error::zero_destination);
 
   std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> unlocked_balance_per_subaddr = unlocked_balance_per_subaddress(subaddr_account, false);
   std::map<uint32_t, uint64_t> balance_per_subaddr = balance_per_subaddress(subaddr_account, false);

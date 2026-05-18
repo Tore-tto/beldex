@@ -3222,7 +3222,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   // initial asset registrations.
   if (hf_version >= feature::CONFIDENTIAL_ASSETS &&
       tx.has_zarcanum_outputs() &&
-      tx.type != txtype::deploy_new_asset)
+      tx.type != txtype::deploy_new_asset &&
+      tx.type != txtype::emit_asset)
   {
     // Must have a surjection proof and a balance proof in asset_proofs
     bool has_surjection = false;
@@ -4549,9 +4550,9 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
           return false;
         }
 
-        if (tx.type != txtype::deploy_new_asset)
+        if (tx.type != txtype::deploy_new_asset && tx.type != txtype::emit_asset)
         {
-          MERROR_VER("Asset operation found in tx type " << tx.type << " but only deploy_new_asset is allowed");
+          MERROR_VER("Asset operation found in tx type " << tx.type << " but only deploy_new_asset and emit_asset are allowed");
           bvc.m_verifivation_failed = true;
           return_tx_to_pool(txs);
           return false;
