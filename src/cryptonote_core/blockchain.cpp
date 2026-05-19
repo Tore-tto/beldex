@@ -3222,30 +3222,32 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   // initial asset registrations.
   if (hf_version >= feature::CONFIDENTIAL_ASSETS &&
       tx.has_zarcanum_outputs() &&
-      tx.type != txtype::deploy_new_asset &&
-      tx.type != txtype::emit_asset)
+      tx.type != txtype::deploy_new_asset)
   {
-    // Must have a surjection proof and a balance proof in asset_proofs
-    bool has_surjection = false;
-    bool has_balance    = false;
-    for (const auto& proof : tx.asset_proofs)
+    if (tx.type == txtype::emit_asset)
     {
-      if (std::holds_alternative<rct::zc_asset_surjection_proof>(proof)) has_surjection = true;
-      if (std::holds_alternative<rct::zc_balance_proof>(proof))          has_balance    = true;
+      // Emission requires a balance proof and an ownership signature from the asset owner.
+      bool has_balance   = false;
+      bool has_ownership = false;
+      MWARNING("Verifying emission tx. hf_version=" << (int)hf_version << ", asset_proofs_size=" << tx.asset_proofs.size());
+      for (const auto& proof : tx.asset_proofs)
+      {
+        if (std::holds_alternative<rct::zc_balance_proof>(proof))                { has_balance   = true; MWARNING("Found balance proof"); }
+        if (std::holds_alternative<rct::asset_operation_ownership_proof>(proof)) { has_ownership = true; MWARNING("Found ownership proof"); }
+      }
+      if (!has_balance)
+      {
+        MERROR_VER("Emission tx missing balance proof");
+        tvc.m_invalid_input = true;
+        return false;
+      }
+      if (!has_ownership)
+      {
+        MERROR_VER("Emission tx missing ownership proof");
+        tvc.m_invalid_input = true;
+        return false;
+      }
     }
-    if (!has_surjection)
-    {
-      MERROR_VER("ZC tx missing asset surjection proof");
-      tvc.m_invalid_output = true;
-      return false;
-    }
-    if (!has_balance)
-    {
-      MERROR_VER("ZC tx missing balance proof");
-      tvc.m_invalid_output = true;
-      return false;
-    }
-
     // Verify the balance proof (linear composition proof: balance_point = a*G + b*X)
     for (const auto& proof : tx.asset_proofs)
     {

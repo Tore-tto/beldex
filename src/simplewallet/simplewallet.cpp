@@ -7978,6 +7978,23 @@ bool simple_wallet::emit_asset(const std::vector<std::string>& args_)
     return false;
   }
 
+  nlohmann::json res;
+  try
+  {
+    const std::string asset_hex = tools::type_to_hex(asset_id);
+    res = m_wallet->json_rpc("get_asset_info", {{"asset_id", asset_hex}});
+    if (!res.contains("ticker"))
+    {
+      fail_msg_writer() << tr("Asset not found");
+      return false;
+    }
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("Failed to get asset info from daemon, error: ") << e.what();
+    return false;
+  }
+
   cryptonote::address_parse_info dest_info{};
   dest_info.address = m_wallet->get_subaddress({m_current_subaddress_account, 0});
   dest_info.is_subaddress = (m_current_subaddress_account != 0);

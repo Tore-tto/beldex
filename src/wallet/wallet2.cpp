@@ -10505,7 +10505,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       THROW_WALLET_EXCEPTION(error::wallet_internal_error, "Failed to generate asset ownership proof");
     }
     tx.asset_proofs.push_back(std::move(ownership_proof));
-    MINFO("Attached ownership proof for emit_asset tx: " << get_transaction_hash(tx));
+    MINFO("Final Transaction JSON: " << obj_to_json_str(tx));
   }
 
   // work out the permutation done on sources
