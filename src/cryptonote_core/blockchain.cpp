@@ -3229,11 +3229,10 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
       // Emission requires a balance proof and an ownership signature from the asset owner.
       bool has_balance   = false;
       bool has_ownership = false;
-      MWARNING("Verifying emission tx. hf_version=" << (int)hf_version << ", asset_proofs_size=" << tx.asset_proofs.size());
       for (const auto& proof : tx.asset_proofs)
       {
-        if (std::holds_alternative<rct::zc_balance_proof>(proof))                { has_balance   = true; MWARNING("Found balance proof"); }
-        if (std::holds_alternative<rct::asset_operation_ownership_proof>(proof)) { has_ownership = true; MWARNING("Found ownership proof"); }
+        if (std::holds_alternative<rct::zc_balance_proof>(proof))                { has_balance   = true; }
+        if (std::holds_alternative<rct::asset_operation_ownership_proof>(proof)) { has_ownership = true; }
       }
       if (!has_balance)
       {

@@ -11298,32 +11298,6 @@ std::vector<wallet2::pending_tx> wallet2::create_asset_emit_tx(
     uint32_t subaddr_account,
     std::set<uint32_t> subaddr_indices)
 {
-  // Count how many ZC outputs are in the caller-supplied destinations.
-  size_t zc_count = 0;
-  for (const auto& d : dsts)
-    if (d.is_zarcanum()) ++zc_count;
-
-  // Pad with zero-value self-sends until we reach the minimum.
-  if (zc_count < cryptonote::MIN_ASSET_EMISSION_OUTPUTS)
-  {
-    const cryptonote::account_public_address self_addr =
-        m_account.get_keys().m_account_address;
-    const size_t needed = cryptonote::MIN_ASSET_EMISSION_OUTPUTS - zc_count;
-
-    for (size_t i = 0; i < needed; ++i)
-    {
-      cryptonote::tx_destination_entry dummy;
-      dummy.addr         = self_addr;
-      dummy.amount       = 0;
-      dummy.is_subaddress = false;
-      dummy.asset_id     = asset_id;
-      dsts.push_back(dummy);
-    }
-
-    MINFO("create_asset_emit_tx: added " << needed
-          << " self-send outputs to reach MIN_ASSET_EMISSION_OUTPUTS ("
-          << cryptonote::MIN_ASSET_EMISSION_OUTPUTS << ")");
-  }
 
   auto hf_ver = get_hard_fork_version();
   THROW_WALLET_EXCEPTION_IF(!hf_ver, error::wallet_internal_error,
@@ -11377,7 +11351,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   bool const is_asset_emit_tx = (tx_params.tx_type == txtype::emit_asset);
   LOG_PRINT_L0("is_asset_emit_tx:" << is_asset_emit_tx);
   if (is_asset_emit_tx)  {
-    THROW_WALLET_EXCEPTION_IF(dsts.size() != cryptonote::MIN_ASSET_EMISSION_OUTPUTS, error::wallet_internal_error, "Asset emit txs must have exactly " + std::to_string(cryptonote::MIN_ASSET_EMISSION_OUTPUTS) + " destinations set, has: " + std::to_string(dsts.size()));
+    THROW_WALLET_EXCEPTION_IF(dsts.size() == 0, error::wallet_internal_error, "Asset emit txs must have atlease 1 destinations set, has: " + std::to_string(dsts.size()));
   }
 
   if(m_light_wallet) {

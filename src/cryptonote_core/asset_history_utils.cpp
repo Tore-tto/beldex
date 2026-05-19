@@ -339,17 +339,16 @@ bool validate_tx_asset_operations_against_db(
     // The wallet auto-generates self-sends to reach this minimum.
     if (hf_version >= feature::CONFIDENTIAL_ASSETS)
     {
-      const bool is_emit = (op.operation_type == asset_descriptor_operation_type::emit_asset);
       const bool is_deploy_with_supply =
           (op.operation_type == asset_descriptor_operation_type::register_asset) &&
           op.field_is_set(asset_field_descriptor) &&
           op.descriptor.current_supply > 0;
 
-      if (is_emit || is_deploy_with_supply)
+      if (is_deploy_with_supply)
       {
         if (zc_out_count < MIN_ASSET_EMISSION_OUTPUTS)
         {
-          reason = "deploy/emit tx must have at least " +
+          reason = "deploy tx must have at least " +
                    std::to_string(MIN_ASSET_EMISSION_OUTPUTS) +
                    " tx_out_zarcanum outputs (got " +
                    std::to_string(zc_out_count) +
