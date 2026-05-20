@@ -2506,7 +2506,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     uint64_t self_received = std::accumulate<decltype(tx_money_got_in_outs.begin()), uint64_t>(tx_money_got_in_outs.begin(), tx_money_got_in_outs.end(), 0,
       [&subaddr_account] (uint64_t acc, const tx_money_got_in_out& p)
       {
-        return acc + (p.index.major == *subaddr_account ? p.amount : 0);
+        return acc + (p.index.major == *subaddr_account && p.asset_id == crypto::null_pkey ? p.amount : 0);
       });
     process_outgoing(txid, tx, height, ts, tx_money_spent_in_ins, self_received, *subaddr_account, subaddr_indices);
     // if sending to yourself at the same subaddress account, set the outgoing payment amount to 0 so that it's less confusing
@@ -2523,7 +2523,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   uint64_t sub_change = 0;
   for (auto i = tx_money_got_in_outs.begin(); i != tx_money_got_in_outs.end();)
   {
-    if (subaddr_account && i->index.major == *subaddr_account)
+    if (subaddr_account && i->index.major == *subaddr_account && i->asset_id == crypto::null_pkey)
     {
       sub_change += i->amount;
       i = tx_money_got_in_outs.erase(i);
@@ -7046,14 +7046,21 @@ uint64_t wallet2::select_transfers(uint64_t needed_money, std::vector<size_t> un
   return found_money;
 }
 //----------------------------------------------------------------------------------------------------
-void wallet2::add_unconfirmed_tx(const cryptonote::transaction& tx, uint64_t amount_in, const std::vector<cryptonote::tx_destination_entry> &dests, const crypto::hash &payment_id, uint64_t change_amount, uint32_t subaddr_account, const std::set<uint32_t>& subaddr_indices)
+void wallet2::add_unconfirmed_tx(const cryptonote::transaction& tx, uint64_t amount_in, const std::vector<cryptonote::tx_destination_entry> &dests, const crypto::hash &payment_id, uint64_t change_amount, uint32_t subaddr_account, const std::set<uint32_t>& subaddr_indices, uint64_t fee)
 {
   unconfirmed_transfer_details& utd = m_unconfirmed_txs[cryptonote::get_transaction_hash(tx)];
   utd.m_amount_in = amount_in;
-  utd.m_amount_out = 0;
-  for (const auto &d: dests)
-    utd.m_amount_out += d.amount;
-  utd.m_amount_out += change_amount; // dests does not contain change
+  if (tx.type == cryptonote::txtype::deploy_new_asset || tx.type == cryptonote::txtype::emit_asset)
+  {
+    utd.m_amount_out = amount_in - fee;
+  }
+  else
+  {
+    utd.m_amount_out = 0;
+    for (const auto &d: dests)
+      utd.m_amount_out += d.amount;
+    utd.m_amount_out += change_amount; // dests does not contain change
+  }
   utd.m_change = change_amount;
   utd.m_sent_time = time(NULL);
   utd.m_tx = (const cryptonote::transaction_prefix&)tx;
@@ -7154,7 +7161,7 @@ void wallet2::commit_tx(pending_tx& ptx, bool flash)
     for(size_t idx: ptx.selected_transfers)
       amount_in += m_transfers[idx].amount();
   }
-  add_unconfirmed_tx(ptx.tx, amount_in, dests, payment_id, ptx.change_dts.amount, ptx.construction_data.subaddr_account, ptx.construction_data.subaddr_indices);
+  add_unconfirmed_tx(ptx.tx, amount_in, dests, payment_id, ptx.change_dts.amount, ptx.construction_data.subaddr_account, ptx.construction_data.subaddr_indices, ptx.fee);
   if (store_tx_info() && ptx.tx_key != crypto::null_skey)
   {
     m_tx_keys.insert(std::make_pair(txid, ptx.tx_key));
@@ -11774,14 +11781,15 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
     }
     else
     {
-      while (!dsts.empty() && dsts[0].amount <= available_amount && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), clsag, bulletproof_plus) < tx_weight_target(upper_transaction_weight_limit))
+      while (!dsts.empty() && (is_asset_register_tx || is_asset_emit_tx || dsts[0].amount <= available_amount) && estimate_tx_weight(tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), clsag, bulletproof_plus) < tx_weight_target(upper_transaction_weight_limit))
       {
         // we can fully pay that destination
         LOG_PRINT_L2("We can fully pay " << get_account_address_as_str(m_nettype, dsts[0].is_subaddress, dsts[0].addr) <<
           " for " << print_money(dsts[0].amount));
         const bool subtract_fee_from_this_dest = subtract_fee_from_outputs.count(destination_index);
         tx.add(dsts[0], dsts[0].amount, original_output_index, m_merge_destinations, subtract_fee_from_this_dest);
-        available_amount -= dsts[0].amount;
+        if (!(is_asset_register_tx || is_asset_emit_tx))
+          available_amount -= dsts[0].amount;
         dsts[0].amount = 0;
         pop_index(dsts, 0);
         ++original_output_index;
@@ -11828,7 +11836,10 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
 
       uint64_t inputs = 0, outputs = 0;
       for (size_t idx: tx.selected_transfers) inputs += m_transfers[idx].amount();
-      for (const auto &o: tx.dsts) outputs += o.amount;
+      for (const auto &o: tx.dsts) {
+        if (!(is_asset_register_tx || is_asset_emit_tx))
+          outputs += o.amount;
+      }
 
       if (subtract_fee_from_outputs.empty()) // if normal tx that doesn't subtract fees
       {

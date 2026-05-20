@@ -260,8 +260,6 @@ namespace
 
       if (!res.contains("decimal_point") || !res["decimal_point"].is_number_unsigned())
       {
-        std::lock_guard lock{asset_display_cache_mutex};
-        asset_display_cache[asset_id] = std::nullopt;
         return std::nullopt;
       }
 
@@ -273,7 +271,7 @@ namespace
     }
     catch (const std::exception&)
     {
-      result = std::nullopt;
+      return std::nullopt;
     }
 
     {
