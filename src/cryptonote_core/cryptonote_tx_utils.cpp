@@ -605,7 +605,9 @@ namespace cryptonote
     }
 
     std::vector<rct::key> amount_keys;
+    auto saved_proofs = std::move(tx.asset_proofs);
     tx.set_null();
+    tx.asset_proofs = std::move(saved_proofs);
     amount_keys.clear();
     if (msout)
     {
@@ -1123,6 +1125,45 @@ namespace cryptonote
 
           crypto::hash tx_prefix_hash;
           get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
+
+          // Generate 1-layer CLSAG signatures (ZC_sig) for Zarcanum inputs
+          for (size_t i = 0; i < sources.size(); ++i) {
+              if (!sources[i].is_zarcanum())
+                  continue;
+
+              const crypto::key_image& k_image = var::get<txin_to_key>(tx.vin[i]).k_image;
+              rct::ZC_sig* found_zc_sig = nullptr;
+              for (auto& proof : tx.asset_proofs) {
+                  if (auto* zs = std::get_if<rct::ZC_sig>(&proof)) {
+                      if (memcmp(&zs->key_image, &k_image, sizeof(crypto::key_image)) == 0) {
+                          found_zc_sig = zs;
+                          break;
+                      }
+                  }
+              }
+
+              if (found_zc_sig) {
+                  rct::keyV ring_pubkeys;
+                  ring_pubkeys.reserve(sources[i].outputs.size());
+                  for (const auto& oe : sources[i].outputs) {
+                      ring_pubkeys.push_back(oe.second.dest);
+                  }
+
+                  rct::ctkey spend_sk;
+                  spend_sk.dest = rct::sk2rct(in_contexts[i].in_ephemeral.sec);
+                  spend_sk.mask = sources[i].mask;
+
+                  found_zc_sig->clsag_sig = rct::genZCSig(
+                      rct::hash2rct(tx_prefix_hash),
+                      ring_pubkeys,
+                      spend_sk,
+                      found_zc_sig->pseudo_out_commitment,
+                      sources[i].real_output,
+                      hwdev
+                  ).clsag_sig;
+              }
+          }
+
           rct::ctkeyV outSk;
           if (use_simple_rct) {
               LOG_PRINT_L2("genRctSimple");

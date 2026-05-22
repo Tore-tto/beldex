@@ -3576,7 +3576,27 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
       }
 
-      if (!rct::verRctNonSemanticsSimple(rv))
+      std::vector<bool> skip(tx.vin.size(), false);
+      for (size_t n = 0; n < tx.vin.size(); ++n)
+      {
+        if (std::holds_alternative<cryptonote::txin_to_key>(tx.vin[n]))
+        {
+          const auto& txin = std::get<cryptonote::txin_to_key>(tx.vin[n]);
+          for (const auto& proof : tx.asset_proofs)
+          {
+            if (const auto* zs = std::get_if<rct::ZC_sig>(&proof))
+            {
+              if (memcmp(&zs->key_image, &txin.k_image, 32) == 0)
+              {
+                skip[n] = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (!rct::verRctNonSemanticsSimple(rv, skip))
       {
         MERROR_VER("Failed to check ringct signatures!");
         return false;

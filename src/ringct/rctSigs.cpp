@@ -985,7 +985,10 @@ namespace rct {
             // Prepare key images
             key c = copy(sig.c1);
             key D_8 = scalarmult8(sig.D);
-            CHECK_AND_ASSERT_MES(!(D_8 == rct::identity()), false, "Bad auxiliary key image!");
+            if (!(C_offset == rct::identity()))
+            {
+                CHECK_AND_ASSERT_MES(!(D_8 == rct::identity()), false, "Bad auxiliary key image!");
+            }
             geDsmp I_precomp;
             geDsmp D_precomp;
             precomp(I_precomp.k,sig.I);
@@ -1615,7 +1618,7 @@ namespace rct {
 
     //ver RingCT simple
     //assumes only post-rct style inputs (at least for max anonymity)
-    bool verRctNonSemanticsSimple(const rctSig & rv) {
+    bool verRctNonSemanticsSimple(const rctSig & rv, const std::vector<bool> & skip) {
       try
       {
         PERF_TIMER(verRctNonSemanticsSimple);
@@ -1644,7 +1647,9 @@ namespace rct {
         results.resize(rv.mixRing.size());
         for (size_t i = 0 ; i < rv.mixRing.size() ; i++) {
           tpool.submit(&waiter, [&, i] {
-              if (is_rct_clsag(rv.type))
+              if (skip.size() > i && skip[i]) {
+                  results[i] = true;
+              } else if (is_rct_clsag(rv.type))
                   results[i] = verRctCLSAGSimple(message, rv.p.CLSAGs[i], rv.mixRing[i], pseudoOuts[i]);
               else
                   results[i] = verRctMGSimple(message, rv.p.MGs[i], rv.mixRing[i], pseudoOuts[i]);
@@ -1811,7 +1816,9 @@ namespace rct {
         // Count ZC inputs and match them to ZC_sig entries in asset_proofs.
         // pubkeys[i] is the ring for input i (built by check_tx_inputs).
         size_t zc_sig_idx = 0;
-        const key tx_prefix_hash = get_pre_clsag_hash(tx.rct_signatures, hw::get_device("default"));
+        crypto::hash tx_prefix_hash_c;
+        cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash_c);
+        const key tx_prefix_hash = hash2rct(tx_prefix_hash_c);
 
         std::vector<const rct::ZC_sig*> zc_sigs;
         for (const auto& proof : tx.asset_proofs)
@@ -1820,19 +1827,28 @@ namespace rct {
 
         // Collect ring pubkeys for ZC inputs (subset of all inputs)
         size_t zc_input_count = 0;
+        size_t matched_zc_sig_count = 0;
         for (size_t i = 0; i < tx.vin.size(); ++i)
         {
             if (!std::holds_alternative<cryptonote::txin_to_key>(tx.vin[i]))
                 continue;
             const auto& txin = std::get<cryptonote::txin_to_key>(tx.vin[i]);
-            // Determine if this input spends a ZC output: amount == 0 and
-            // no standard RingCT CLSAG entry for it (ZC inputs have their
-            // own ZC_sig, not in rv.p.CLSAGs).  For now we identify ZC inputs
-            // by checking if a ZC_sig exists for this index.
-            if (zc_sig_idx >= zc_sigs.size())
-                continue;  // more inputs than ZC_sigs → not a ZC input
 
-            const rct::ZC_sig& zc_sig = *zc_sigs[zc_sig_idx];
+            // Robustly match the ZC_sig using the input's key image
+            const rct::ZC_sig* found_zc_sig = nullptr;
+            for (const auto* zs : zc_sigs)
+            {
+                if (memcmp(&zs->key_image, &txin.k_image, sizeof(crypto::key_image)) == 0)
+                {
+                    found_zc_sig = zs;
+                    break;
+                }
+            }
+
+            if (!found_zc_sig)
+                continue; // This input is not a Zarcanum input!
+
+            const rct::ZC_sig& zc_sig = *found_zc_sig;
 
             // Extract ring pubkeys for this input from pubkeys[i].
             rct::keyV ring_pks;
@@ -1847,21 +1863,14 @@ namespace rct {
                 return false;
             }
 
-            // Key image in ZC_sig must match txin.k_image
-            if (memcmp(&zc_sig.key_image, &txin.k_image, sizeof(crypto::key_image)) != 0)
-            {
-                reason = "ZC_sig key_image mismatch for input " + std::to_string(i);
-                return false;
-            }
-
-            ++zc_sig_idx;
+            ++matched_zc_sig_count;
             ++zc_input_count;
         }
 
-        if (zc_sig_idx != zc_sigs.size())
+        if (matched_zc_sig_count != zc_sigs.size())
         {
             reason = "ZC_sig count mismatch: have " + std::to_string(zc_sigs.size()) +
-                     ", matched " + std::to_string(zc_sig_idx);
+                     ", matched " + std::to_string(matched_zc_sig_count);
             return false;
         }
 
@@ -1960,7 +1969,7 @@ namespace rct {
         ctkeyV ring;
         ring.reserve(ring_pubkeys.size());
         for (const auto& pk : ring_pubkeys)
-            ring.push_back({pk, rct::zero()});
+            ring.push_back({pk, rct::identity()});
 
         // z = 0 because there is no commitment-layer secret in the 1-layer ring.
         // C_offset = zero so the commitment difference is trivially zero.
@@ -1968,7 +1977,7 @@ namespace rct {
         in_sk.dest = spend_sk.dest;
         in_sk.mask = rct::zero();  // no commitment blinding for 1-layer ring
 
-        // Use CLSAG_Gen with z=0 and C_offset=zero (1-layer mode).
+        // Use CLSAG_Gen with z=0 and C_offset=identity (1-layer mode).
         keyV P, C, C_nonzero;
         P.reserve(ring.size());
         C.reserve(ring.size());
@@ -1976,12 +1985,12 @@ namespace rct {
         for (const ctkey& k : ring)
         {
             P.push_back(k.dest);
-            C_nonzero.push_back(rct::zero());
-            C.push_back(rct::zero());  // C[i] = C_nonzero[i] - C_offset = 0 - 0
+            C_nonzero.push_back(rct::identity());
+            C.push_back(rct::identity());  // C[i] = C_nonzero[i] - C_offset = identity - identity
         }
 
         key z = rct::zero();  // commitment blinding secret = 0 (1-layer)
-        key C_offset = rct::zero();
+        key C_offset = rct::identity();
 
         clsag sig = CLSAG_Gen(message, P, in_sk.dest, C, z, C_nonzero, C_offset,
                               real_index, nullptr, nullptr, nullptr, hwdev);
@@ -2004,10 +2013,15 @@ namespace rct {
         ctkeyV ring;
         ring.reserve(ring_pubkeys.size());
         for (const auto& pk : ring_pubkeys)
-            ring.push_back({pk, rct::zero()});
+            ring.push_back({pk, rct::identity()});
 
-        // 1-layer CLSAG verify: C_offset = zero
-        return verRctCLSAGSimple(message, sig.clsag_sig, ring, rct::zero());
+        // The 'I' field inside clsag_sig is not serialized, so we must 
+        // inject it from the explicitly stored key_image in ZC_sig.
+        clsag local_clsag = sig.clsag_sig;
+        local_clsag.I = rct::ki2rct(sig.key_image);
+
+        // 1-layer CLSAG verify: C_offset = identity
+        return verRctCLSAGSimple(message, local_clsag, ring, rct::identity());
     }
 
 }

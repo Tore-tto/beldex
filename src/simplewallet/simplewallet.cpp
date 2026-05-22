@@ -234,6 +234,76 @@ namespace
     return s;
   }
 
+  bool parse_custom_asset_amount(uint64_t& amount, std::string_view str_amount, uint8_t decimal_point)
+  {
+    std::string s(str_amount);
+    if (s.empty()) return false;
+
+    auto pos = s.find('.');
+    std::string whole_str, frac_str;
+    if (pos == std::string::npos)
+    {
+      whole_str = s;
+    }
+    else
+    {
+      whole_str = s.substr(0, pos);
+      frac_str = s.substr(pos + 1);
+    }
+
+    if (whole_str.find_first_not_of("0123456789") != std::string::npos)
+      return false;
+    if (frac_str.find_first_not_of("0123456789") != std::string::npos)
+      return false;
+
+    uint64_t whole = 0;
+    if (!whole_str.empty())
+    {
+      try {
+        whole = boost::lexical_cast<uint64_t>(whole_str);
+      } catch (...) {
+        return false;
+      }
+    }
+
+    // Scale up the whole part
+    for (uint8_t i = 0; i < decimal_point; ++i)
+    {
+      if (whole > std::numeric_limits<uint64_t>::max() / 10)
+        return false;
+      whole *= 10;
+    }
+
+    uint64_t frac = 0;
+    if (!frac_str.empty())
+    {
+      // Trim trailing zeros from fractional part if it's too long
+      while (frac_str.size() > decimal_point && frac_str.back() == '0')
+        frac_str.pop_back();
+
+      if (frac_str.size() > decimal_point)
+        return false; // too many significant decimals
+
+      try {
+        frac = boost::lexical_cast<uint64_t>(frac_str);
+      } catch (...) {
+        return false;
+      }
+
+      // Scale up fractional part
+      for (size_t i = frac_str.size(); i < decimal_point; ++i)
+      {
+        frac *= 10;
+      }
+    }
+
+    if (frac > std::numeric_limits<uint64_t>::max() - whole)
+      return false;
+
+    amount = whole + frac;
+    return true;
+  }
+
   struct asset_display_info
   {
     uint8_t decimal_point = 0;
@@ -6247,91 +6317,173 @@ bool simple_wallet::transfer_main(Transfer transfer_type, const std::vector<std:
   std::vector<cryptonote::address_parse_info> dsts_info;
   std::vector<cryptonote::tx_destination_entry> dsts;
   size_t num_subaddresses = 0;
-  for (size_t i = 0; i < local_args.size(); )
+  bool is_custom_asset_transfer = false;
+  if (local_args.size() >= 2)
   {
-    dsts_info.emplace_back();
-    cryptonote::address_parse_info& info = dsts_info.back();
-    cryptonote::tx_destination_entry de;
-    bool r = true;
-
-    std::string addr, payment_id_uri, tx_description, recipient_name, error;
-    std::vector<std::string> unknown_parameters;
-    uint64_t amount = 0;
-    bool has_uri = m_wallet->parse_uri(local_args[i], addr, payment_id_uri, amount, tx_description, recipient_name, unknown_parameters, error);
-    LOG_PRINT_L0("has_uri" << has_uri);
-    if (i + 1 < local_args.size())
+    if (local_args[0].size() == 64 && local_args[1].find(':') != std::string::npos)
     {
-      r = cryptonote::get_account_address_from_str(info, m_wallet->nettype(), local_args[i]);
+      is_custom_asset_transfer = true;
+    }
+  }
+
+  if (is_custom_asset_transfer)
+  {
+    for (size_t i = 0; i < local_args.size(); )
+    {
+      if (i + 1 >= local_args.size())
+      {
+        fail_msg_writer() << tr("wrong number of arguments");
+        return false;
+      }
+
+      crypto::public_key asset_id_key;
+      if (!tools::hex_to_type(local_args[i], asset_id_key))
+      {
+        fail_msg_writer() << tr("invalid asset ID: ") << local_args[i];
+        return false;
+      }
+
+      auto display_info = get_asset_display_info(*m_wallet, asset_id_key);
+      if (!display_info)
+      {
+        fail_msg_writer() << tr("failed to retrieve asset display info for asset ID: ") << local_args[i];
+        return false;
+      }
+
+      std::string addr_amount = local_args[i + 1];
+      auto colon_pos = addr_amount.rfind(':');
+      if (colon_pos == std::string::npos)
+      {
+        fail_msg_writer() << tr("invalid address:amount pair: ") << addr_amount;
+        return false;
+      }
+      std::string addr_str = addr_amount.substr(0, colon_pos);
+      std::string amount_str = addr_amount.substr(colon_pos + 1);
+
+      dsts_info.emplace_back();
+      cryptonote::address_parse_info& info = dsts_info.back();
+      cryptonote::tx_destination_entry de;
+
+      bool r = cryptonote::get_account_address_from_str(info, m_wallet->nettype(), addr_str);
       if (!r && m_wallet->is_trusted_daemon())
       {
-        std::optional<std::string> address = m_wallet->resolve_address(local_args[i]);
+        std::optional<std::string> address = m_wallet->resolve_address(addr_str);
         if (address)
           r = cryptonote::get_account_address_from_str(info, m_wallet->nettype(), *address);
       }
-      if(!r)
+      if (!r)
       {
-        fail_msg_writer() << tr("Could not resolve address");
+        fail_msg_writer() << tr("Could not resolve address: ") << addr_str;
         return false;
       }
 
-      bool ok = cryptonote::parse_amount(de.amount, local_args[i + 1]);
-      if(!ok || 0 == de.amount)
+      de.asset_id = asset_id_key;
+      bool ok = parse_custom_asset_amount(de.amount, amount_str, display_info->decimal_point);
+      if (!ok || 0 == de.amount)
       {
-        fail_msg_writer() << tr("amount is wrong: ") << local_args[i] << ' ' << local_args[i + 1] <<
+        fail_msg_writer() << tr("amount is wrong: ") << amount_str <<
           ", " << tr("expected number from 0 to ") << print_money(std::numeric_limits<uint64_t>::max());
         return false;
       }
-      de.original = local_args[i];
+
+      de.original = addr_str;
+      de.addr = info.address;
+      de.is_subaddress = info.is_subaddress;
+      de.is_integrated = info.has_payment_id;
+      num_subaddresses += info.is_subaddress;
+      dsts.push_back(de);
+
       i += 2;
     }
-    else
+  }
+  else
+  {
+    for (size_t i = 0; i < local_args.size(); )
     {
-      if (boost::starts_with(local_args[i], "beldex:"))
-        fail_msg_writer() << tr("Invalid last argument: ") << local_args.back() << ": " << error;
+      dsts_info.emplace_back();
+      cryptonote::address_parse_info& info = dsts_info.back();
+      cryptonote::tx_destination_entry de;
+      bool r = true;
+
+      std::string addr, payment_id_uri, tx_description, recipient_name, error;
+      std::vector<std::string> unknown_parameters;
+      uint64_t amount = 0;
+      bool has_uri = m_wallet->parse_uri(local_args[i], addr, payment_id_uri, amount, tx_description, recipient_name, unknown_parameters, error);
+      LOG_PRINT_L0("has_uri" << has_uri);
+      if (i + 1 < local_args.size())
+      {
+        r = cryptonote::get_account_address_from_str(info, m_wallet->nettype(), local_args[i]);
+        if (!r && m_wallet->is_trusted_daemon())
+        {
+          std::optional<std::string> address = m_wallet->resolve_address(local_args[i]);
+          if (address)
+            r = cryptonote::get_account_address_from_str(info, m_wallet->nettype(), *address);
+        }
+        if(!r)
+        {
+          fail_msg_writer() << tr("Could not resolve address");
+          return false;
+        }
+
+        bool ok = cryptonote::parse_amount(de.amount, local_args[i + 1]);
+        if(!ok || 0 == de.amount)
+        {
+          fail_msg_writer() << tr("amount is wrong: ") << local_args[i] << ' ' << local_args[i + 1] <<
+            ", " << tr("expected number from 0 to ") << print_money(std::numeric_limits<uint64_t>::max());
+          return false;
+        }
+        de.original = local_args[i];
+        i += 2;
+      }
       else
-        fail_msg_writer() << tr("Invalid last argument: ") << local_args.back();
-      return false;
+      {
+        if (boost::starts_with(local_args[i], "beldex:"))
+          fail_msg_writer() << tr("Invalid last argument: ") << local_args.back() << ": " << error;
+        else
+          fail_msg_writer() << tr("Invalid last argument: ") << local_args.back();
+        return false;
+      }
+
+
+      de.addr = info.address;
+      de.is_subaddress = info.is_subaddress;
+      de.is_integrated = info.has_payment_id;
+      num_subaddresses += info.is_subaddress;
+
+      if (info.has_payment_id || !payment_id_uri.empty())
+      {
+        if (payment_id_seen)
+        {
+          fail_msg_writer() << tr("a single transaction cannot use more than one payment id/integrated address");
+          return false;
+        }
+
+        crypto::hash payment_id;
+        std::string extra_nonce;
+        if (info.has_payment_id)
+        {
+          set_encrypted_payment_id_to_tx_extra_nonce(extra_nonce, info.payment_id);
+        }
+        else if (tools::wallet2::parse_payment_id(payment_id_uri, payment_id))
+        {
+          return long_payment_id_failure(false);
+        }
+        else
+        {
+          fail_msg_writer() << tr("failed to parse payment id, though it was detected");
+          return false;
+        }
+        bool r = add_extra_nonce_to_tx_extra(extra, extra_nonce);
+        if(!r)
+        {
+          fail_msg_writer() << tr("failed to set up payment id, though it was decoded correctly");
+          return false;
+        }
+        payment_id_seen = true;
+      }
+
+      dsts.push_back(de);
     }
-
-
-    de.addr = info.address;
-    de.is_subaddress = info.is_subaddress;
-    de.is_integrated = info.has_payment_id;
-    num_subaddresses += info.is_subaddress;
-
-    if (info.has_payment_id || !payment_id_uri.empty())
-    {
-      if (payment_id_seen)
-      {
-        fail_msg_writer() << tr("a single transaction cannot use more than one payment id/integrated address");
-        return false;
-      }
-
-      crypto::hash payment_id;
-      std::string extra_nonce;
-      if (info.has_payment_id)
-      {
-        set_encrypted_payment_id_to_tx_extra_nonce(extra_nonce, info.payment_id);
-      }
-      else if (tools::wallet2::parse_payment_id(payment_id_uri, payment_id))
-      {
-        return long_payment_id_failure(false);
-      }
-      else
-      {
-        fail_msg_writer() << tr("failed to parse payment id, though it was detected");
-        return false;
-      }
-      bool r = add_extra_nonce_to_tx_extra(extra, extra_nonce);
-      if(!r)
-      {
-        fail_msg_writer() << tr("failed to set up payment id, though it was decoded correctly");
-        return false;
-      }
-      payment_id_seen = true;
-    }
-
-    dsts.push_back(de);
   }
 
   if (subtract_fee_from_all)
