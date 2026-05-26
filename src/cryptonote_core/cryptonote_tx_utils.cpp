@@ -1051,8 +1051,9 @@ namespace cryptonote
           std::vector<rct::multisig_kLRki> kLRki;
           for (size_t i = 0; i < sources.size(); ++i) {
               rct::ctkey ctkey;
-              amount_in += sources[i].amount;
-              inamounts.push_back(sources[i].amount);
+              uint64_t bdx_amount = sources[i].is_zarcanum() ? 0 : sources[i].amount;
+              amount_in += bdx_amount;
+              inamounts.push_back(bdx_amount);
               index.push_back(sources[i].real_output);
               // inSk: (secret key, mask)
               ctkey.dest = rct::sk2rct(in_contexts[i].in_ephemeral.sec);

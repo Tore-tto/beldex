@@ -5460,6 +5460,7 @@ bool simple_wallet::show_balance_unlocked(bool detailed)
   // HF21: show per-asset balances
   {
     const auto asset_bals = m_wallet->asset_balances(m_current_subaddress_account, false);
+    const auto asset_unlocked_bals = m_wallet->asset_balances(m_current_subaddress_account, true);
     if (!asset_bals.empty())
     {
       success_msg_writer() << tr("Confidential asset balances:");
@@ -5471,9 +5472,20 @@ bool simple_wallet::show_balance_unlocked(bool detailed)
             ? print_asset_amount(amount, asset_info->decimal_point)
             : std::to_string(amount);
 
+        // Fetch unlocked balance
+        uint64_t unlocked_amount = 0;
+        auto unlocked_it = asset_unlocked_bals.find(asset_id);
+        if (unlocked_it != asset_unlocked_bals.end())
+          unlocked_amount = unlocked_it->second;
+
+        const std::string formatted_unlocked = asset_info
+            ? print_asset_amount(unlocked_amount, asset_info->decimal_point)
+            : std::to_string(unlocked_amount);
+
         success_msg_writer() << "  " << asset_hex
                              << (asset_info && !asset_info->ticker.empty() ? " (" + asset_info->ticker + ")" : "")
                              << "  balance: " << formatted_amount
+                             << ", unlocked balance: " << formatted_unlocked
                              << (asset_info ? fmt::format(" [dp={}]", asset_info->decimal_point) : " [atomic units]");
       }
     }
@@ -6076,6 +6088,18 @@ bool simple_wallet::confirm_and_send_tx(std::vector<cryptonote::address_parse_in
   // if more than one tx necessary, prompt user to confirm
   if (m_wallet->always_confirm_transfers() || ptx_vector.size() > 1)
   {
+      crypto::public_key asset_id = crypto::null_pkey;
+      for (const auto& ptx : ptx_vector) {
+        for (const auto& dt : ptx.dests) {
+          if (dt.asset_id != crypto::null_pkey) {
+            asset_id = dt.asset_id;
+            break;
+          }
+        }
+        if (asset_id != crypto::null_pkey) break;
+      }
+      
+      const auto asset_info = get_asset_display_info(*m_wallet, asset_id);
       uint64_t total_sent = 0;
       uint64_t total_fee = 0;
       uint64_t dust_not_in_fee = 0;
@@ -6084,9 +6108,13 @@ bool simple_wallet::confirm_and_send_tx(std::vector<cryptonote::address_parse_in
       for (size_t n = 0; n < ptx_vector.size(); ++n)
       {
         total_fee += ptx_vector[n].fee;
-        for (auto i: ptx_vector[n].selected_transfers)
-          total_sent += m_wallet->get_transfer_details(i).amount();
-        total_sent -= ptx_vector[n].change_dts.amount + ptx_vector[n].fee;
+        
+        for (const auto& dt : ptx_vector[n].dests) {
+          if (dt.asset_id == asset_id) {
+            total_sent += dt.amount;
+          }
+        }
+        
         change += ptx_vector[n].change_dts.amount;
 
         if (ptx_vector[n].dust_added_to_fee)
@@ -6108,7 +6136,16 @@ bool simple_wallet::confirm_and_send_tx(std::vector<cryptonote::address_parse_in
         if (subaddr_indices.size() > 1)
           prompt << tr("WARNING: Outputs of multiple addresses are being used together, which might potentially compromise your confidentiality.\n");
       }
-      prompt << boost::format(tr("Sending %s.  ")) % print_money(total_sent);
+      if (asset_id != crypto::null_pkey)
+      {
+        std::string formatted_amount = asset_info ? print_asset_amount(total_sent, asset_info->decimal_point) : std::to_string(total_sent);
+        std::string ticker = (asset_info && !asset_info->ticker.empty()) ? " " + asset_info->ticker : "";
+        prompt << boost::format(tr("Sending %s%s.  ")) % formatted_amount % ticker;
+      }
+      else
+      {
+        prompt << boost::format(tr("Sending %s.  ")) % print_money(total_sent);
+      }
       if (ptx_vector.size() > 1)
       {
         prompt << boost::format(tr("Your transaction needs to be split into %llu transactions.  "

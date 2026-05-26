@@ -6174,12 +6174,24 @@ std::map<uint32_t, uint64_t> wallet2::balance_per_subaddress(uint32_t index_majo
    {
     if (utx.second.m_subaddr_account == index_major && utx.second.m_state != wallet2::unconfirmed_transfer_details::failed)
     {
-      // all changes go to 0-th subaddress (in the current subaddress account)
-      auto found = amount_per_subaddr.find(0);
-      if (found == amount_per_subaddr.end())
-        amount_per_subaddr[0] = utx.second.m_change;
-      else
-        found->second += utx.second.m_change;
+      // Prevent custom asset change or custom asset transactions from incorrectly inflating the BDX balance.
+      // We check the destination asset ID. If it is a custom asset, we skip adding this change to the BDX pool.
+      crypto::public_key tx_asset = crypto::null_pkey;
+      for (const auto& d : utx.second.m_dests) {
+        if (d.asset_id != crypto::null_pkey) {
+          tx_asset = d.asset_id;
+          break;
+        }
+      }
+      
+      if (tx_asset == crypto::null_pkey) {
+        // all changes go to 0-th subaddress (in the current subaddress account)
+        auto found = amount_per_subaddr.find(0);
+        if (found == amount_per_subaddr.end())
+          amount_per_subaddr[0] = utx.second.m_change;
+        else
+          found->second += utx.second.m_change;
+      }
     }
    }
   }
