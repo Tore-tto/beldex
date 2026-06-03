@@ -782,6 +782,8 @@ namespace tools
       }
       std::vector<wallet::transfer_details> transfers;
       m_wallet->get_transfers(transfers);
+      
+      std::map<crypto::public_key, std::string> asset_tickers;
 
       // HF21: aggregate per-asset balances from ZC transfer details
       {
@@ -790,6 +792,8 @@ namespace tools
         for (const auto& td : transfers)
         {
           if (!td.is_zarcanum() || td.m_spent) continue;
+          if (!req.all_accounts && td.m_subaddr_index.major != req.account_index) continue;
+          if (!req.address_indices.empty() && req.address_indices.count(td.m_subaddr_index.minor) == 0) continue;
           const uint64_t unlock_time = td.m_tx.unlock_time;
           const bool unlocked = (unlock_time == 0) ||
               (unlock_time < cryptonote::MAX_BLOCK_NUMBER
@@ -802,10 +806,11 @@ namespace tools
         {
           GET_BALANCE::asset_balance_entry entry{};
           entry.asset_id         = tools::type_to_hex(asset_id);
-          entry.ticker           = "";  // populated by daemon RPC get_asset_info if needed
-          entry.balance          = total;
-          entry.unlocked_balance = asset_unlocked.count(asset_id) ? asset_unlocked.at(asset_id) : 0;
-          res.asset_balances.emplace_back(std::move(entry));
+          try {
+            const auto res_info = m_wallet->json_rpc("get_asset_info", {{"asset_id", entry.asset_id}});
+            if (res_info.contains("ticker") && res_info["ticker"].is_string())
+              asset_tickers[asset_id] = res_info["ticker"].get<std::string>();
+          } catch (...) {}
         }
       }
 
@@ -823,6 +828,11 @@ namespace tools
         {
           for (const auto& i : balance_per_subaddress)
             address_indices.insert(i.first);
+          for (const auto& td : transfers)
+          {
+            if (td.is_zarcanum() && !td.m_spent && td.m_subaddr_index.major == account_index)
+              address_indices.insert(td.m_subaddr_index.minor);
+          }
         }
         for (uint32_t i : address_indices)
         {
@@ -837,6 +847,32 @@ namespace tools
           info.time_to_unlock = unlocked_balance_per_subaddress[i].second.second;
           info.label = m_wallet->get_subaddress_label(index);
           info.num_unspent_outputs = std::count_if(transfers.begin(), transfers.end(), [&](const wallet::transfer_details& td) { return !td.m_spent && td.m_subaddr_index == index; });
+          
+          // HF21: per-asset balances for this specific subaddress
+          std::map<crypto::public_key, uint64_t> subaddr_asset_total, subaddr_asset_unlocked;
+          const uint64_t blockchain_height = m_wallet->get_blockchain_current_height();
+          for (const auto& td : transfers)
+          {
+            if (!td.is_zarcanum() || td.m_spent) continue;
+            if (td.m_subaddr_index != index) continue;
+            const uint64_t unlock_time = td.m_tx.unlock_time;
+            const bool unlocked = (unlock_time == 0) ||
+                (unlock_time < cryptonote::MAX_BLOCK_NUMBER
+                    ? blockchain_height >= unlock_time
+                    : (uint64_t)std::time(nullptr) >= unlock_time);
+            subaddr_asset_total[td.m_asset_id] += td.m_amount;
+            if (unlocked) subaddr_asset_unlocked[td.m_asset_id] += td.m_amount;
+          }
+          for (const auto& [asset_id, total] : subaddr_asset_total)
+          {
+            GET_BALANCE::asset_balance_entry entry{};
+            entry.asset_id         = tools::type_to_hex(asset_id);
+            entry.ticker           = asset_tickers[asset_id];
+            entry.balance          = total;
+            entry.unlocked_balance = subaddr_asset_unlocked.count(asset_id) ? subaddr_asset_unlocked.at(asset_id) : 0;
+            info.asset_balances.emplace_back(std::move(entry));
+          }
+
           res.per_subaddress.emplace_back(std::move(info));
         }
       }
@@ -1081,6 +1117,10 @@ namespace tools
       de.is_subaddress = info.is_subaddress;
       de.amount = it->amount;
       de.is_integrated = info.has_payment_id;
+      if (!it->asset_id.empty()) {
+        if (!tools::hex_to_type(it->asset_id, de.asset_id))
+          throw wallet_rpc_error{error_code::BAD_HEX, "Failed to parse asset_id"};
+      }
       dsts.push_back(de);
 
       if (info.has_payment_id)
@@ -3852,8 +3892,18 @@ namespace {
     const crypto::public_key asset_id = cryptonote::get_or_calculate_asset_id(ado);
 
     std::set<uint32_t> subaddr_indices;
+    
+    // Constructing destinations for the initial mint
+    std::vector<cryptonote::tx_destination_entry> dsts;
+    cryptonote::tx_destination_entry de;
+    de.addr = m_wallet->get_subaddress({req.account_index, 0});
+    de.amount = descriptor.current_supply;
+    de.asset_id = asset_id;
+    de.is_subaddress = (req.account_index != 0);
+    dsts.push_back(de);
+
     auto ptx_vector = m_wallet->create_asset_deploy_tx(
-        {}, asset_id, cryptonote::TX_OUTPUT_DECOYS, req.priority, extra,
+        dsts, asset_id, cryptonote::TX_OUTPUT_DECOYS, req.priority, extra,
         req.account_index, subaddr_indices);
 
     if (ptx_vector.empty())
