@@ -192,6 +192,7 @@ namespace cryptonote
 
     bool coin_burn(std::vector<std::string> args);
     bool deploy_new_asset(const std::vector<std::string>& args);  // HF21
+    bool my_asset(const std::vector<std::string>& args);
     bool emit_asset(const std::vector<std::string>& args);        // HF21
 
     enum class sweep_type_t { stake, register_stake, all_or_below, single };
