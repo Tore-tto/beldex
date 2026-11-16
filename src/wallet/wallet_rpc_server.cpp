@@ -4144,8 +4144,43 @@ namespace {
     require_open();
     MINT_TOKEN::response res{};
     crypto::token_id token_id;
-    if (!tools::hex_to_type(req.token_id, token_id))
+    if (!tools::hex_to_type(req.token_id, token_id) || token_id == crypto::null_tid)
       throw wallet_rpc_error{error_code::BAD_HEX, "Failed to parse token_id"};
+    if (req.amount == 0)
+      throw wallet_rpc_error{error_code::ZERO_DESTINATION, "Mint amount must be greater than zero"};
+
+    // Same pre-flight checks as the CLI `mint_token`: fail here with a clear
+    // error instead of building a tx the daemon is certain to reject.
+    nlohmann::json info_res;
+    try {
+      nlohmann::json info_req = nlohmann::json::object();
+      info_req["token_id"] = req.token_id;
+      info_res = m_wallet->json_rpc("get_token_info", info_req);
+    } catch (const std::exception& e) {
+      throw wallet_rpc_error{error_code::UNKNOWN_ERROR, std::string{"Failed to fetch token info from daemon: "} + e.what()};
+    }
+
+    // Only the token owner can mint: the ownership proof is signed with this
+    // wallet's spend key and verified against the on-chain descriptor.owner.
+    const std::string wallet_owner = tools::type_to_hex(m_wallet->get_account().get_keys().m_account_address.m_spend_public_key);
+    if (info_res.value("owner", "") != wallet_owner)
+      throw wallet_rpc_error{error_code::TX_NOT_POSSIBLE, "This wallet does not own the token: " + req.token_id};
+
+    // The supply cap is on cumulative issuance; burned tokens do not restore
+    // mint headroom. (Older daemons don't report remaining_mintable; the
+    // consensus check still applies there.)
+    if (const auto it = info_res.find("remaining_mintable"); it != info_res.end() && it->is_number_unsigned())
+    {
+      const uint64_t remaining = it->get<uint64_t>();
+      if (req.amount > remaining)
+        throw wallet_rpc_error{error_code::TX_NOT_POSSIBLE,
+            "Mint amount " + std::to_string(req.amount) + " exceeds the remaining mintable supply " +
+            std::to_string(remaining) + " (atomic units; burned tokens cannot be minted again)"};
+    }
+
+    // Minted tokens always go to the wallet's primary address (the owner key's
+    // own address). account_index / subaddr_indices only select which BDX
+    // outputs pay the fee.
     cryptonote::account_public_address dest_addr = m_wallet->get_account().get_keys().m_account_address;
     bool is_subaddress = false;
     std::vector<cryptonote::tx_destination_entry> dsts;

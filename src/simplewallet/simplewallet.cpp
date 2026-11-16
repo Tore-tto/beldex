@@ -8292,9 +8292,14 @@ bool simple_wallet::mint_token(const std::vector<std::string>& args_)
     }
   }
 
+  // Minted tokens always go to the wallet's primary address (the owner key's
+  // own address), same as the wallet RPC. The current account only selects
+  // which BDX outputs pay the fee. Minting to subaddress (account, 0) would be
+  // a single-subaddress token destination, which the recipient scan cannot
+  // currently find.
   cryptonote::address_parse_info dest_info{};
-  dest_info.address = m_wallet->get_subaddress({m_current_subaddress_account, 0});
-  dest_info.is_subaddress = (m_current_subaddress_account != 0);
+  dest_info.address = m_wallet->get_account().get_keys().m_account_address;
+  dest_info.is_subaddress = false;
 
   SCOPED_WALLET_UNLOCK();
 
@@ -8339,7 +8344,7 @@ bool simple_wallet::mint_token(const std::vector<std::string>& args_)
         << "Token emission submitted\n"
         << "  Token ID: " << tools::type_to_hex(token_id) << "\n"
         << "  Amount:   " << print_token_amount(amount, decimal_point) << " (" << amount << " atomic units)\n"
-        << "  To:       " << m_wallet->get_subaddress_as_str({m_current_subaddress_account, 0});
+        << "  To:       " << m_wallet->get_subaddress_as_str({0, 0});
   }
   catch (const std::exception& e)
   {

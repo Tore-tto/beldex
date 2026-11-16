@@ -2712,6 +2712,10 @@ This command is only required if the open wallet is one of the owners of a BNS r
   };
 
   // HF21: Mint additional tokens for an existing privacy token.
+  // The wallet must own the token. `amount` is in atomic units (the CLI
+  // `mint_token` takes a display amount and scales it by decimal_point).
+  // Minted tokens are sent to the wallet's primary address; account_index and
+  // subaddr_indices only choose the BDX outputs that pay the fee.
   struct MINT_TOKEN : RESTRICTED
   {
     static constexpr auto names() { return NAMES("mint_token"); }
