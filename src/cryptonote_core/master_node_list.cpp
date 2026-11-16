@@ -384,6 +384,14 @@ namespace master_nodes
       return 0;
     }
 
+    // rct_signatures.ecdhInfo/outPk hold native outputs only (tx_out_zyphora outputs carry their
+    // own commitment), so they are indexed by native-output position, not by vout index. The
+    // derivation scalar is still taken at the vout index, matching how the output key is derived.
+    size_t rct_index = 0;
+    for (int j = 0; j < i; ++j)
+      if (!std::holds_alternative<cryptonote::tx_out_zyphora>(tx.vout[j].target))
+        ++rct_index;
+
     rct::key mask;
     uint64_t money_transferred = 0;
 
@@ -398,10 +406,10 @@ namespace master_nodes
           case rct::RCTType::Bulletproof2:
           case rct::RCTType::CLSAG:
           case rct::RCTType::BulletproofPlus:
-              money_transferred = rct::decodeRctSimple(tx.rct_signatures, rct::sk2rct(scalar1), i, mask, hwdev);
+              money_transferred = rct::decodeRctSimple(tx.rct_signatures, rct::sk2rct(scalar1), rct_index, mask, hwdev);
               break;
           case rct::RCTType::Full:
-              money_transferred = rct::decodeRct(tx.rct_signatures, rct::sk2rct(scalar1), i, mask, hwdev);
+              money_transferred = rct::decodeRct(tx.rct_signatures, rct::sk2rct(scalar1), rct_index, mask, hwdev);
               break;
           default:
               LOG_PRINT_L0(__func__ << ": Unsupported rct type: " << (int)tx.rct_signatures.type);

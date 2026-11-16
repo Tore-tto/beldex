@@ -1036,6 +1036,22 @@ namespace cryptonote
     return false;
   }
   //---------------------------------------------------------------
+  bool tx_has_misplaced_privacy_token_content(const transaction& tx)
+  {
+    switch (tx.type)
+    {
+      case txtype::standard:
+      case txtype::register_privacy_token:
+      case txtype::mint_token:
+      case txtype::update_token:
+      case txtype::burn_token:
+        return false;
+      default:
+        return tx.has_zyphora_inputs() || tx.has_zyphora_outputs() ||
+            !tx.zy_sig.empty() || !tx.token_proofs.empty();
+    }
+  }
+  //---------------------------------------------------------------
   bool get_inputs_money_amount(const transaction& tx, uint64_t& money)
   {
     money = 0;

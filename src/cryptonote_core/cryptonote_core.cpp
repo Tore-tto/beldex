@@ -1630,6 +1630,12 @@ namespace cryptonote
       return false;
     }
 
+    if (tx_has_misplaced_privacy_token_content(tx))
+    {
+      MERROR_VER("privacy-token content in tx type " << tx.type << ", rejected for tx id= " << get_transaction_hash(tx));
+      return false;
+    }
+
     if (tx.version >= txversion::v2_ringct)
     {
       const size_t native_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const tx_out& out) {

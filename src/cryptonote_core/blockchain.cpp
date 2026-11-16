@@ -1380,6 +1380,15 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
   MDEBUG("Miner tx hash: " << get_transaction_hash(b.miner_tx));
+
+  // A coinbase may only pay to native outputs. A tx_out_zyphora output carries its own amount
+  // commitment and blinded token id, which the DB stores as-is; in a coinbase nothing proves
+  // either of them, so such an output must never be accepted. This applies at every height:
+  // before the privacy-token branch the DB refused any non-txout_to_key output outright.
+  for (const auto& out : b.miner_tx.vout)
+    CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(out.target), false, "coinbase transaction output has a non-native target type");
+  CHECK_AND_ASSERT_MES(b.miner_tx.zy_sig.empty() && b.miner_tx.token_proofs.empty(), false, "coinbase transaction carries privacy-token signatures or proofs");
+
   CHECK_AND_ASSERT_MES(b.miner_tx.unlock_time == height + MINED_MONEY_UNLOCK_WINDOW, false, "coinbase transaction transaction has the wrong unlock time=" << b.miner_tx.unlock_time << ", expected " << height + MINED_MONEY_UNLOCK_WINDOW);
 
   if (hf_version >= hf::hf13_checkpointing)
@@ -3634,6 +3643,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     MERROR_VER("Privacy-token content present before hard-fork activation in tx " << get_transaction_hash(tx));
     tvc.m_invalid_input  = true;
     tvc.m_verbose_error  = "privacy-token content before HF activation";
+    return false;
+  }
+  if (tx_has_misplaced_privacy_token_content(tx))
+  {
+    MERROR_VER("Privacy-token content in tx type " << tx.type << " in tx " << get_transaction_hash(tx));
+    tvc.m_invalid_input  = true;
+    tvc.m_verbose_error  = "privacy-token content is only allowed in standard and token transactions";
     return false;
   }
   {

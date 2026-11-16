@@ -172,6 +172,11 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
 
     // miner v2 txes have their coinbase output in one single out to save space,
     // and we store them as rct outputs with an identity mask
+    // Defence in depth for Blockchain::prevalidate_miner_transaction: add_output stores a zyphora
+    // output's own commitment and token tag, which nothing proves for a coinbase.
+    CHECK_AND_ASSERT_THROW_MES(!(miner_tx && is_zyphora),
+        "coinbase transaction " << tx_hash << " has a tx_out_zyphora output");
+
     if (miner_tx && tx.version >= cryptonote::txversion::v2_ringct)
     {
       cryptonote::tx_out vout = tx.vout[i];

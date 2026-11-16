@@ -175,6 +175,10 @@ namespace cryptonote
   bool add_token_descriptor_operation_to_tx_extra(std::vector<uint8_t>& tx_extra, const tx_extra_token_descriptor_operation& op);
   bool get_token_descriptor_operation_from_tx_extra(const std::vector<uint8_t>& tx_extra, tx_extra_token_descriptor_operation& op, size_t skip = 0);
   bool tx_has_privacy_token_content(const transaction& tx);
+  // True if the tx carries token inputs, outputs, signatures or proofs in a tx type that must not
+  // have them. Only standard transfers and the four token operation types may; every other type
+  // (stake, BNS, coin burn, ...) has type-specific rules written for native outputs only.
+  bool tx_has_misplaced_privacy_token_content(const transaction& tx);
   bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_public_keys, size_t output_index);
   // Overload for privacy token outputs (HF21+): checks stealth_address match.
   bool is_out_to_acc(const account_keys& acc, const tx_out_zyphora& zout, const crypto::public_key& tx_pub_key, size_t output_index);
