@@ -10,8 +10,19 @@ namespace cryptonote
 {
   crypto::token_id get_or_calculate_token_id(const tx_extra_token_descriptor_operation& tdo)
   {
-    if (tdo.field_is_set(token_field_token_id) && tdo.token_id != crypto::null_tid)
-      return tdo.token_id;
+    switch (tdo.operation_type)
+    {
+      case token_descriptor_operation_type::register_token:
+        break; // derived below
+
+      case token_descriptor_operation_type::mint_token:
+      case token_descriptor_operation_type::update_token:
+      case token_descriptor_operation_type::burn_token:
+        return tdo.field_is_set(token_field_token_id) ? tdo.token_id : crypto::null_tid;
+
+      default:
+        return crypto::null_tid;
+    }
 
     if (!tdo.field_is_set(token_field_descriptor))
       return crypto::null_tid;

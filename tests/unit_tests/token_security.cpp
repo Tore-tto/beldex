@@ -213,6 +213,48 @@ TEST_F(TokenSecurity, BurnDoesNotRestoreMintHeadroom)
   EXPECT_FALSE(apply_token_operation_to_state(id, op(operation::mint_token, 1), state, reason));
 }
 
+// The id function itself decides, by operation type, where an id comes from:
+// a register can never choose its own id, and the other operations must name
+// their token explicitly rather than have it re-derived from a descriptor.
+TEST_F(TokenSecurity, TokenIdSourceIsFixedByOperationType)
+{
+  crypto::token_id chosen{};
+  chosen.data[0] = 0x42; // arbitrary attacker-picked id
+
+  // register: an explicit id is ignored; the derived id is returned.
+  auto reg = registration;
+  reg.fields |= token_field_token_id;
+  reg.token_id = chosen;
+  EXPECT_EQ(get_or_calculate_token_id(reg), id);
+  EXPECT_NE(get_or_calculate_token_id(reg), chosen);
+  // ...and the operation is still rejected outright by the validator.
+  std::string reason;
+  EXPECT_FALSE(validate_token_descriptor_operation(reg, reason));
+  EXPECT_NE(reason.find("must not carry an explicit token_id"), std::string::npos) << reason;
+
+  for (operation type : {operation::mint_token, operation::update_token, operation::burn_token})
+  {
+    SCOPED_TRACE(static_cast<int>(type));
+    // With the field set, the named id is used.
+    auto op = registration;
+    op.operation_type = type;
+    op.fields = token_field_descriptor | token_field_token_id | token_field_amount;
+    op.token_id = id;
+    op.amount = 1;
+    EXPECT_EQ(get_or_calculate_token_id(op), id);
+
+    // Without it, the id is NOT re-derived from the embedded descriptor.
+    op.fields = token_field_descriptor | token_field_amount;
+    EXPECT_EQ(get_or_calculate_token_id(op), crypto::null_tid);
+    EXPECT_FALSE(validate_token_descriptor_operation(op, reason));
+  }
+
+  // Undefined operation type never yields an id.
+  auto undefined = registration;
+  undefined.operation_type = operation::undefined;
+  EXPECT_EQ(get_or_calculate_token_id(undefined), crypto::null_tid);
+}
+
 TEST_F(TokenSecurity, EmissionCannotUseBurnCommitmentExemption)
 {
   for (size_t kind : {size_t{0}, size_t{1}})
