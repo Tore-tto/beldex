@@ -19,6 +19,11 @@ struct token_consensus_state
   token_descriptor_base descriptor{};
   uint64_t current_supply = 0;
   uint64_t total_max_supply = 0;
+  // Cumulative amount ever issued (initial supply + every mint). Never
+  // decreases: a burn lowers current_supply but does NOT give mint headroom
+  // back, so the owner can only ever mint total_max_supply - total_minted.
+  // Consensus-critical (checked on every mint_token).
+  uint64_t total_minted = 0;
   // Number of operations applied to this token so far.
   uint64_t op_count = 0;
   // Rolling hash chaining every applied operation, for integrity/debugging.
@@ -31,6 +36,7 @@ struct token_consensus_state
     FIELD(total_max_supply)
     FIELD(op_count)
     FIELD(last_op_hash)
+    FIELD(total_minted)
   END_SERIALIZE()
 };
 
