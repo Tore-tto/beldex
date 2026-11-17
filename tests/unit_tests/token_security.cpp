@@ -322,4 +322,76 @@ TEST_F(TokenSecurity, ReusedTransactionObjectDoesNotCarryTokenSections)
   EXPECT_TRUE(reused_base.token_proofs.empty());
   EXPECT_TRUE(reused_base.zy_sig.empty());
 }
+
+TEST_F(TokenSecurity, TokenProofSetHasOneCanonicalEncoding)
+{
+  // Prevalidation runs before any signature or proof check, so these txs only
+  // need to reach it; later steps may fail for unrelated reasons (missing
+  // surjection/range proofs), which is why only the reason is inspected.
+  auto prevalidation_reason = [](const transaction& tx) {
+    std::string reason;
+    rct::verTokenProofs(tx, {}, {}, reason);
+    return reason;
+  };
+  auto is_layout_error = [](const std::string& reason) {
+    return reason.find("canonical order") != std::string::npos ||
+           reason.find("invalid flags") != std::string::npos ||
+           reason.find("without zyphora inputs") != std::string::npos;
+  };
+
+  // The wallet's own layouts are accepted by the layout checks.
+  for (size_t kind = 0; kind < 3; ++kind)
+  {
+    SCOPED_TRACE(kind);
+    const std::string reason = prevalidation_reason(make_tx(kind));
+    EXPECT_FALSE(is_layout_error(reason)) << reason;
+  }
+
+  // Reordering: mint carries {amount-commitment, ownership}.
+  {
+    auto tx = make_tx(1);
+    ASSERT_EQ(tx.token_proofs.size(), 2u);
+    std::swap(tx.token_proofs[0], tx.token_proofs[1]);
+    EXPECT_NE(prevalidation_reason(tx).find("canonical order"), std::string::npos);
+  }
+
+  // Duplicates are rejected by the same ordering rule.
+  {
+    auto tx = make_tx(2);
+    tx.token_proofs.push_back(tx.token_proofs.back());
+    EXPECT_NE(prevalidation_reason(tx).find("canonical order"), std::string::npos);
+  }
+
+  // Undefined flag bits.
+  for (uint8_t flags : {uint8_t{0}, uint8_t{3}, uint8_t{0x81}, uint8_t{0xff}})
+  {
+    SCOPED_TRACE(int{flags});
+    auto tx = make_tx(0);
+    auto* aop = std::get_if<rct::token_operation_proof>(&tx.token_proofs[0]);
+    ASSERT_NE(aop, nullptr);
+    aop->flags = flags;
+    EXPECT_NE(prevalidation_reason(tx).find("invalid flags"), std::string::npos);
+  }
+
+  // ...and they cannot be decoded from the wire either.
+  {
+    auto tx = make_tx(0);
+    auto proof = std::get<rct::token_operation_proof>(tx.token_proofs[0]);
+    std::string blob = serialization::dump_binary(proof);
+    ASSERT_EQ(static_cast<uint8_t>(blob[0]), 1);
+    rct::token_operation_proof parsed{};
+    ASSERT_NO_THROW(serialization::parse_binary(blob, parsed));
+    blob[0] = 3;
+    EXPECT_THROW(serialization::parse_binary(blob, parsed), std::exception);
+  }
+
+  // An unverified balance proof on txs without zyphora inputs.
+  for (size_t kind = 0; kind < 3; ++kind)
+  {
+    SCOPED_TRACE(kind);
+    auto tx = make_tx(kind);
+    tx.token_proofs.insert(tx.token_proofs.begin(), rct::zy_balance_proof{});
+    EXPECT_NE(prevalidation_reason(tx).find("without zyphora inputs"), std::string::npos);
+  }
+}
 } // namespace

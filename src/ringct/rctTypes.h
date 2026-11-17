@@ -746,7 +746,9 @@ namespace rct {
 
       BEGIN_SERIALIZE_OBJECT()
         FIELD(flags)
-        if (has_composition_proof()) FIELD(composition_proof)
+        if (flags != 1)
+          throw std::runtime_error("Bad token_operation_proof serialization (invalid flags)");
+        FIELD(composition_proof)
       END_SERIALIZE()
     };
 
