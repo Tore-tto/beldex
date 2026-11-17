@@ -24,6 +24,7 @@
 
 #include <cassert>
 #include <stdexcept>
+#include <string_view>
 #include <mutex>
 #include <vector>
 
@@ -40,13 +41,24 @@ namespace crypto {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// Hash a variadic sequence of rct::key values into a single scalar.
-// Concatenates all keys and runs Keccak-256, then reduces mod l.
-static rct::key hash_to_scalar_varargs(std::initializer_list<const rct::key*> keys)
+// Domain tags for the Fiat-Shamir challenges below. Each proof family hashes
+// its own tag first, so a transcript made for one family can never be replayed
+// as another, and none of them collides with crypto::generate_signature (the
+// wallet's message-signing Schnorr, which hashes no tag). Changing a tag
+// invalidates every proof of that family: it is consensus-critical.
+static constexpr std::string_view DOMAIN_SCHNORR_G          = "BELDEX_TOKEN_SCHNORR_G_V1";
+static constexpr std::string_view DOMAIN_SCHNORR_X          = "BELDEX_TOKEN_SCHNORR_X_V1";
+static constexpr std::string_view DOMAIN_LINEAR_COMPOSITION = "BELDEX_TOKEN_LINEAR_COMPOSITION_V1";
+static constexpr std::string_view DOMAIN_DOUBLE_SCHNORR     = "BELDEX_TOKEN_DOUBLE_SCHNORR_V1";
+static constexpr std::string_view DOMAIN_UG_AGGREGATION     = "BELDEX_TOKEN_UG_AGGREGATION_V1";
+
+// Hash a domain tag followed by a variadic sequence of rct::key values into a
+// single scalar: Keccak-256(domain || keys...), reduced mod l.
+static rct::key hash_to_scalar_varargs(std::string_view domain, std::initializer_list<const rct::key*> keys)
 {
-    // Allocate buffer: 32 bytes per key
     std::vector<uint8_t> buf;
-    buf.reserve(keys.size() * 32);
+    buf.reserve(domain.size() + keys.size() * 32);
+    buf.insert(buf.end(), domain.begin(), domain.end());
     for (const rct::key* k : keys)
         buf.insert(buf.end(), k->bytes, k->bytes + 32);
 
@@ -215,8 +227,8 @@ bool generate_schnorr_sig(const rct::key& msg,
     rct::key r = rct::skGen();
     rct::key R = rct::scalarmultBase(r);
 
-    // c = H(msg || P || R)
-    out.c = hash_to_scalar_varargs({&msg, &P, &R});
+    // c = H(domain || msg || P || R)
+    out.c = hash_to_scalar_varargs(DOMAIN_SCHNORR_G, {&msg, &P, &R});
 
     // y = r - c*s  mod l
     // sc_mulsub(y, c, s, r)  computes  r - c*s
@@ -238,8 +250,8 @@ bool verify_schnorr_sig(const rct::key&      msg,
     rct::key R_prime;
     rct::addKeys(R_prime, yG, cP);
 
-    // c' = H(msg || P || R')
-    rct::key c_prime = hash_to_scalar_varargs({&msg, &P, &R_prime});
+    // c' = H(domain || msg || P || R')
+    rct::key c_prime = hash_to_scalar_varargs(DOMAIN_SCHNORR_G, {&msg, &P, &R_prime});
     return c_prime == sig.c;
   }
   catch (...) { return false; }   // invalid point encodings throw; treat as invalid proof
@@ -257,7 +269,7 @@ bool generate_schnorr_sig_X(const rct::key& msg,
     rct::key r = rct::skGen();
     rct::key R = rct::scalarmultX(r);   // R = r*X
 
-    out.c = hash_to_scalar_varargs({&msg, &P, &R});
+    out.c = hash_to_scalar_varargs(DOMAIN_SCHNORR_X, {&msg, &P, &R});
     sc_mulsub(out.y.bytes, out.c.bytes, s.bytes, r.bytes);
     return true;
 }
@@ -275,7 +287,7 @@ bool verify_schnorr_sig_X(const rct::key&      msg,
     rct::key R_prime;
     rct::addKeys(R_prime, yX, cP);
 
-    rct::key c_prime = hash_to_scalar_varargs({&msg, &P, &R_prime});
+    rct::key c_prime = hash_to_scalar_varargs(DOMAIN_SCHNORR_X, {&msg, &P, &R_prime});
     return c_prime == sig.c;
   }
   catch (...) { return false; }
@@ -299,8 +311,8 @@ bool generate_linear_composition_proof(const rct::key&             msg,
     rct::key R;
     rct::addKeys(R, r0G, r1X);
 
-    // c = H(msg || P || R)
-    out.c = hash_to_scalar_varargs({&msg, &P, &R});
+    // c = H(domain || msg || P || R)
+    out.c = hash_to_scalar_varargs(DOMAIN_LINEAR_COMPOSITION, {&msg, &P, &R});
 
     // y0 = r0 - c*a,  y1 = r1 - c*b
     sc_mulsub(out.y0.bytes, out.c.bytes, a.bytes, r0.bytes);
@@ -325,7 +337,7 @@ bool verify_linear_composition_proof(const rct::key&                   msg,
     rct::addKeys(tmp, y0G, y1X);
     rct::addKeys(R_prime, tmp, cP);
 
-    rct::key c_prime = hash_to_scalar_varargs({&msg, &P, &R_prime});
+    rct::key c_prime = hash_to_scalar_varargs(DOMAIN_LINEAR_COMPOSITION, {&msg, &P, &R_prime});
     return c_prime == sig.c;
   }
   catch (...) { return false; }
@@ -348,8 +360,8 @@ bool generate_double_schnorr_sig(const rct::key&        msg,
     rct::key R0 = rct::scalarmultX(r0);
     rct::key R1 = rct::scalarmultBase(r1);
 
-    // c = H(msg || P0 || P1 || R0 || R1)
-    out.c = hash_to_scalar_varargs({&msg, &P0, &P1, &R0, &R1});
+    // c = H(domain || msg || P0 || P1 || R0 || R1)
+    out.c = hash_to_scalar_varargs(DOMAIN_DOUBLE_SCHNORR, {&msg, &P0, &P1, &R0, &R1});
 
     // y0 = r0 - c*s0,  y1 = r1 - c*s1
     sc_mulsub(out.y0.bytes, out.c.bytes, s0.bytes, r0.bytes);
@@ -377,7 +389,7 @@ bool verify_double_schnorr_sig(const rct::key&              msg,
     rct::key R1_prime;
     rct::addKeys(R1_prime, y1G, cP1);
 
-    rct::key c_prime = hash_to_scalar_varargs({&msg, &P0, &P1, &R0_prime, &R1_prime});
+    rct::key c_prime = hash_to_scalar_varargs(DOMAIN_DOUBLE_SCHNORR, {&msg, &P0, &P1, &R0_prime, &R1_prime});
     return c_prime == sig.c;
   }
   catch (...) { return false; }
@@ -836,10 +848,11 @@ bool generate_vector_ug_aggregation_proof(const rct::key&  context_hash,
     if (aux_commitments.size()  != n)    return false;
     if (tags.size()              != n)   return false;
 
-    // w = Hs(m, {E_j}, {E'_j})
+    // w = Hs(domain, m, {E_j}, {E'_j})
     std::vector<uint8_t> buf;
     buf.reserve((1 + 2 * n) * 32);
     auto push = [&](const rct::key& k){ buf.insert(buf.end(), k.bytes, k.bytes + 32); };
+    buf.insert(buf.end(), DOMAIN_UG_AGGREGATION.begin(), DOMAIN_UG_AGGREGATION.end());
     push(context_hash);
     for (const auto& e : real_commitments) push(e);
     for (const auto& e : aux_commitments)  push(e);
@@ -937,6 +950,7 @@ bool verify_vector_ug_aggregation_proof(const rct::key&  context_hash,
     std::vector<uint8_t> buf;
     buf.reserve((1 + 2 * n) * 32);
     auto push = [&](const rct::key& k){ buf.insert(buf.end(), k.bytes, k.bytes + 32); };
+    buf.insert(buf.end(), DOMAIN_UG_AGGREGATION.begin(), DOMAIN_UG_AGGREGATION.end());
     push(context_hash);
     for (const auto& e : real_commitments) push(e);
 

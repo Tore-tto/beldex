@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "ringct/rctOps.h"
 #include "crypto/token_proofs.h"
+#include "crypto/crypto.h"
 #include "serialization/binary_utils.h"
 #include "serialization/vector.h"
 #include <cstring>
@@ -403,4 +404,40 @@ TEST(TokenProofs, LegacyBgeTranscriptsAndRetargetingRejected)
   legacy.target = plus(legacy.target, rct::scalarmultX(rct::identity()));
   sc_add(legacy.proof.z.bytes, legacy.proof.z.bytes, x_power.bytes);
   EXPECT_FALSE(crypto::verify_BGE_proof(legacy.context, legacy.ring, legacy.target, legacy.proof));
+}
+
+// The owner proof is a Schnorr signature by the wallet's spend key. Its
+// challenge carries a domain tag, so it must not verify as an ordinary
+// crypto::signature (what the wallet's `sign` command produces) over the same
+// hash and key, and an ordinary signature must not verify as an owner proof.
+TEST(TokenProofs, OwnerSchnorrIsDomainSeparatedFromMessageSignatures)
+{
+  crypto::public_key pub;
+  crypto::secret_key sec;
+  crypto::generate_keys(pub, sec);
+  const crypto::hash hash = crypto::cn_fast_hash("token prefix", 12);
+  const rct::key msg = rct::hash2rct(hash), P = rct::pk2rct(pub);
+
+  crypto::schnorr_sig_s proof{};
+  ASSERT_TRUE(crypto::generate_schnorr_sig(msg, P, rct::sk2rct(sec), proof));
+  ASSERT_TRUE(crypto::verify_schnorr_sig(msg, P, proof));
+  crypto::signature as_signature{};
+  std::memcpy(&as_signature.c, proof.c.bytes, 32);
+  std::memcpy(&as_signature.r, proof.y.bytes, 32);
+  EXPECT_FALSE(crypto::check_signature(hash, pub, as_signature));
+
+  crypto::signature signature{};
+  crypto::generate_signature(hash, pub, sec, signature);
+  ASSERT_TRUE(crypto::check_signature(hash, pub, signature));
+  crypto::schnorr_sig_s as_proof{};
+  std::memcpy(as_proof.c.bytes, &signature.c, 32);
+  std::memcpy(as_proof.y.bytes, &signature.r, 32);
+  EXPECT_FALSE(crypto::verify_schnorr_sig(msg, P, as_proof));
+
+  // The G and X families use different tags as well.
+  crypto::schnorr_sig_s over_x{};
+  const rct::key PX = rct::scalarmultX(rct::sk2rct(sec));
+  ASSERT_TRUE(crypto::generate_schnorr_sig_X(msg, PX, rct::sk2rct(sec), over_x));
+  EXPECT_TRUE(crypto::verify_schnorr_sig_X(msg, PX, over_x));
+  EXPECT_FALSE(crypto::verify_schnorr_sig(msg, PX, over_x));
 }

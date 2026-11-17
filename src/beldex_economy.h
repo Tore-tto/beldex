@@ -156,7 +156,8 @@ inline constexpr uint64_t REGISTRATION_COLLATERAL_AMOUNT_TESTNET = 100 * beldex:
 
 constexpr uint64_t registration_collateral_amount(cryptonote::network_type nettype)
 {
-  return nettype == cryptonote::network_type::TESTNET
+  // Devnet follows testnet, the same as the operation fees below.
+  return nettype == cryptonote::network_type::TESTNET || nettype == cryptonote::network_type::DEVNET
       ? REGISTRATION_COLLATERAL_AMOUNT_TESTNET : REGISTRATION_COLLATERAL_AMOUNT;
 }
 

@@ -10495,11 +10495,6 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     nlohmann::json res;
     if (!amounts.empty())
     {
-      std::cout << "Requesting output histogram for amounts: ";
-      for (const auto& amount : amounts)
-        std::cout << print_money(amount) << " ";
-      std::cout << std::endl;
-
       std::sort(amounts.begin(), amounts.end());
       auto end = std::unique(amounts.begin(), amounts.end());
       amounts.resize(std::distance(amounts.begin(), end));

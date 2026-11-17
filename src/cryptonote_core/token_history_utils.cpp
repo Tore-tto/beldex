@@ -603,9 +603,10 @@ bool validate_tx_token_operations_against_db(
       return false;
     }
 
-    // ── Mandatory fan-out: deploy and mint must create >= MIN_TOKEN_MINT_OUTPUTS
-    // tx_out_zyphora outputs so that ring members exist from the first block.
-    // The wallet auto-generates self-sends to reach this minimum.
+    // ── Mandatory fan-out: a register with non-zero supply must create
+    // >= MIN_TOKEN_MINT_OUTPUTS tx_out_zyphora outputs so that enough decoys
+    // exist for later transactions in the token. Register only by design: a
+    // mint needs a single token output. The wallet auto-generates self-sends.
     if (hf_version >= feature::PRIVACY_TOKENS)
     {
       const bool is_deploy_with_supply =

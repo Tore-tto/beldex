@@ -57,40 +57,38 @@ inline constexpr uint64_t TX_OUTPUT_DECOYS                     = 9;
 inline constexpr size_t   TX_BULLETPROOF_MAX_OUTPUTS           = 16;
 inline constexpr size_t   TX_BULLETPROOF_PLUS_MAX_OUTPUTS      = 16;
 
-// ── Privacy token ring design (HF21+) ─────────────────────────────────
+// ── Privacy token ring design (HF22+) ─────────────────────────────────
 //
-// Zyphora inputs (spending a tx_out_zyphora) use the SAME output_amounts[0]
-// pool as native BDX RingCT outputs for decoy selection.  Both BDX RCT outputs
-// (txout_to_key) and privacy token outputs (tx_out_zyphora) store
+// Zyphora inputs (spending a tx_out_zyphora) draw ring members from the same
+// output_amounts[0] pool as native BDX RingCT outputs: both store
 // tx_out.amount == 0 on-chain, so they live in the same LMDB bucket.
 //
-// The CLSAG ring is 1-layer (key only):
-//   - BDX decoy  → ring member pubkey = txout_to_key.key
-//   - ZY decoy   → ring member pubkey = tx_out_zyphora.stealth_address
-//   - ZY real    → ring member pubkey = tx_out_zyphora.stealth_address
+// The ring signature (ZY_sig) is a 3-layer CLSAG sharing one secret index:
+//   - layer 1: the output key (stealth address)
+//   - layer 2: the amount commitment against the pseudo-output commitment
+//   - layer 3: the blinded token id against the pseudo-output token tag
 //
 // Amount balance and token integrity are proven separately:
-//   - Balance:   linear_composition_proof  (proves tx balances in G and X)
-//   - Token:     BGE surjection proof       (proves output token is real)
-//   - Range:     BulletproofPlus            (proves amounts in [0, 2^64))
+//   - Balance:   double-Schnorr proof        (the tx balances in G and X)
+//   - Token:     BGE surjection proof        (each output token is a real input token)
+//   - Range:     BulletproofPlus             (amounts in [0, 2^64))
 //
-// Result: no bootstrapping problem — day-1 token transfers can draw decoys
-// from the existing BDX output pool (millions of outputs available).
+// A native output in a token ring is visibly native and cannot be the real
+// spend, so it gives no cover. The wallet therefore picks token decoys from
+// token outputs only; the register fan-out below is what provides them.
 inline constexpr size_t TOKEN_RING_SIZE = TX_OUTPUT_DECOYS; // same as BDX
 
-// ── Mandatory fan-out for deploy / mint transactions (HF21+) ───────────────
+// ── Mandatory fan-out for register transactions (HF22+) ───────────────────
 //
-// Every register_privacy_token or mint_token transaction MUST produce at least
-// MIN_TOKEN_MINT_OUTPUTS tx_out_zyphora outputs.
-//
-// Why: even though the ring draws from the shared BDX pool, we want
-// dedicated ZY ring members for future token-specific BGE proofs.
-// The wallet auto-generates self-send outputs (to its own subaddresses)
-// to reach this minimum whenever the user's destinations fall short.
+// A register_privacy_token transaction with a non-zero initial supply MUST
+// produce at least MIN_TOKEN_MINT_OUTPUTS tx_out_zyphora outputs. The rule is
+// deliberately register-only: it seeds enough token outputs to serve as decoys
+// for later transactions in that token. A mint_token needs one token output.
+// The wallet auto-generates self-send outputs to reach this minimum whenever
+// the user's destinations fall short.
 //
 // Value = TX_OUTPUT_DECOYS + 1 = 10: guarantees a full ring of 9 decoys
-// + 1 real is always achievable using only prior ZY outputs of the same
-// token, independent of the BDX pool.
+// + 1 real is achievable from the token's own outputs right after register.
 inline constexpr size_t MIN_TOKEN_MINT_OUTPUTS = TX_OUTPUT_DECOYS + 1; // 10
 inline constexpr uint64_t PUBLIC_ADDRESS_TEXTBLOB_VER          = 0;
 

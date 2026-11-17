@@ -226,8 +226,14 @@ namespace boost
       if (x.rct_signatures.type != rct::RCTType::Null)
         a & x.rct_signatures.p;
 
+      // v1: privacy-token proofs and input signatures (one ZY_sig per zy
+      // input). Without zy_sig a token tx restored from an archive cannot be
+      // verified or relayed.
       if (ver >= boost::serialization::version_type{1})
+      {
         a & x.token_proofs;
+        a & x.zy_sig;
+      }
     }
   }
 

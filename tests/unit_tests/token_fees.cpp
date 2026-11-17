@@ -39,8 +39,9 @@ transaction fee_tx(operation op, uint64_t burned, uint64_t fee)
 
 TEST(TokenFees, RegistrationCollateralByNetwork)
 {
-  EXPECT_EQ(tokens::registration_collateral_amount(TESTNET), 100 * beldex::COIN);
-  for (auto net : {MAINNET, DEVNET, FAKECHAIN})
+  for (auto net : {TESTNET, DEVNET})
+    EXPECT_EQ(tokens::registration_collateral_amount(net), 100 * beldex::COIN);
+  for (auto net : {MAINNET, FAKECHAIN})
     EXPECT_EQ(tokens::registration_collateral_amount(net), 10'000 * beldex::COIN);
 }
 
