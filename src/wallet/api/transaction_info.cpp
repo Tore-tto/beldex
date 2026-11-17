@@ -179,6 +179,12 @@ std::string TransactionInfoImpl::paymentId() const
 }
 
 EXPORT
+std::string TransactionInfoImpl::tokenId() const
+{
+    return m_token_id;
+}
+
+EXPORT
 const std::vector<TransactionInfo::Transfer> &TransactionInfoImpl::transfers() const
 {
     return m_transfers;
