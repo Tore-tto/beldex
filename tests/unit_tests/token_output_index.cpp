@@ -288,4 +288,36 @@ TEST_F(TokenOutputIndex, MixedTransactionPreservesNativeCommitmentAfterTokenOutp
   EXPECT_EQ(db.get_output_key(0, 1, true).commitment, native_commitment);
   check_ranges();
 }
+
+// A coinbase carries no proofs, so a token output in it would be stored with a commitment and
+// blinded token id that nobody proved. The write path must refuse it and store nothing.
+TEST_F(TokenOutputIndex, CoinbaseTokenOutputIsRejected)
+{
+  add_block(1, 0); // Control: an ordinary coinbase is stored.
+  const auto height = db.height();
+  const auto stored = db.get_num_outputs(0);
+  ASSERT_EQ(stored, 1);
+
+  block blk{};
+  blk.prev_id = db.get_block_hash_from_height(height - 1);
+  blk.timestamp = height;
+  blk.miner_tx.version = txversion::v2_ringct;
+  blk.miner_tx.vin.emplace_back(txin_gen{height});
+  blk.miner_tx.vout.push_back(tx_out{1, txout_to_key{}});
+  tx_out_zyphora token{};
+  token.stealth_address = rct::rct2pk(rct::scalarmultBase(rct::d2h(3)));
+  token.amount_commitment = rct::rct2pk(rct::scalarmultH(rct::d2h(5)));
+  token.blinded_token_id = rct::rct2tid(rct::scalarmultX(rct::d2h(7)));
+  blk.miner_tx.vout.push_back(tx_out{1, token});
+  {
+    db_wtxn_guard guard(&db);
+    EXPECT_ANY_THROW(db.add_block({blk, block_to_blob(blk)}, 1, 1, height + 1, height + 1, {}));
+    guard.abort();
+  }
+  EXPECT_EQ(db.height(), height);
+  EXPECT_EQ(db.get_num_outputs(0), stored);
+
+  add_block(1, 0); // The database stays usable after the refused block.
+  check_ranges();
+}
 } // namespace
