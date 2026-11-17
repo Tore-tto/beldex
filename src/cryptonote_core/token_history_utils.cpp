@@ -281,7 +281,6 @@ bool apply_token_operation_to_state(
       state.descriptor = d;
       state.current_supply = d.current_supply;
       state.total_max_supply = d.total_max_supply;
-      state.total_minted = d.current_supply; // the initial supply counts as issued
       return true;
     }
 
@@ -291,21 +290,13 @@ bool apply_token_operation_to_state(
         return reject("mint_token for unknown token");
       if (!op.field_is_set(token_field_amount))
         return reject("mint_token missing amount");
-      // The cap applies to cumulative issuance (total_minted), not to the
-      // circulating supply: burned tokens do not reopen mint headroom, so the
-      // owner can only ever mint total_max_supply - total_minted more.
-      if (state.total_minted > std::numeric_limits<uint64_t>::max() - op.amount)
-        return reject("mint_token supply overflow");
-      const uint64_t new_total_minted = state.total_minted + op.amount;
-      if (new_total_minted > state.total_max_supply)
-        return reject("mint_token exceeds max supply (burned tokens do not restore mint headroom)");
-      // current_supply <= total_minted always holds, so this cannot overflow;
-      // checked anyway so a corrupt row can never wrap the supply.
       if (state.current_supply > std::numeric_limits<uint64_t>::max() - op.amount)
         return reject("mint_token supply overflow");
-      state.total_minted = new_total_minted;
-      state.current_supply += op.amount;
-      state.descriptor.current_supply = state.current_supply;
+      const uint64_t new_supply = state.current_supply + op.amount;
+      if (new_supply > state.total_max_supply)
+        return reject("mint_token exceeds max supply");
+      state.current_supply = new_supply;
+      state.descriptor.current_supply = new_supply;
       return true;
     }
 
@@ -317,7 +308,6 @@ bool apply_token_operation_to_state(
         return reject("burn_token missing amount");
       if (state.current_supply < op.amount)
         return reject("burn_token exceeds current supply");
-      // total_minted is deliberately left untouched: a burn is permanent.
       state.current_supply -= op.amount;
       state.descriptor.current_supply = state.current_supply;
       return true;

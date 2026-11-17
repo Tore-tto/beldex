@@ -3785,10 +3785,6 @@ namespace cryptonote::rpc {
     resp["owner"]            = tools::type_to_hex(state.descriptor.owner);
     resp["current_supply"]   = state.current_supply;
     resp["total_max_supply"] = state.total_max_supply;
-    // Burns do not restore mint headroom: the cap is on cumulative issuance.
-    resp["total_minted"]     = state.total_minted;
-    resp["remaining_mintable"] = state.total_max_supply > state.total_minted
-        ? state.total_max_supply - state.total_minted : 0;
     resp["decimal_point"]    = state.descriptor.decimal_point;
     resp["meta_info"]        = state.descriptor.meta_info;
     resp["status"]           = STATUS_OK;

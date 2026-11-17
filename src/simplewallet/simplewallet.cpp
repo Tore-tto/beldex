@@ -8078,8 +8078,6 @@ bool simple_wallet::tokens_by_owner(const std::vector<std::string>& args_)
           {"full_name", info_res.value("full_name", "")},
           {"total_max_supply", info_res.value("total_max_supply", (uint64_t)0)},
           {"current_supply", info_res.value("current_supply", (uint64_t)0)},
-          {"total_minted", info_res.value("total_minted", (uint64_t)0)},
-          {"remaining_mintable", info_res.value("remaining_mintable", (uint64_t)0)},
           {"decimal_point", info_res.value("decimal_point", 0)},
           {"meta_info", info_res.value("meta_info", "")}
         };
@@ -8274,22 +8272,6 @@ bool simple_wallet::mint_token(const std::vector<std::string>& args_)
   {
     fail_msg_writer() << tr("Invalid amount: ") << args[1];
     return false;
-  }
-
-  // The supply cap is on cumulative issuance: burned tokens do not restore
-  // mint headroom. Fail early with a clear message instead of letting the
-  // daemon reject the tx. (Older daemons don't report remaining_mintable; the
-  // consensus check still applies there.)
-  if (info_res.contains("remaining_mintable") && info_res["remaining_mintable"].is_number_unsigned())
-  {
-    const uint64_t remaining = info_res["remaining_mintable"].get<uint64_t>();
-    if (amount > remaining)
-    {
-      fail_msg_writer() << tr("Mint amount exceeds the remaining mintable supply: ")
-                        << print_token_amount(remaining, decimal_point)
-                        << tr(" (burned tokens cannot be minted again)");
-      return false;
-    }
   }
 
   // Minted tokens always go to the wallet's primary address (the owner key's

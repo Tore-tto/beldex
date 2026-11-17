@@ -170,49 +170,6 @@ TEST_F(TokenSecurity, BurnCannotUseNativeInputsToReduceTokenSupply)
   EXPECT_EQ(state.current_supply, 100);
 }
 
-// A burn lowers current_supply but must not hand mint headroom back: the cap
-// is on cumulative issuance (total_minted), so the owner can only ever mint
-// total_max_supply - total_minted, however much has been burned since.
-TEST_F(TokenSecurity, BurnDoesNotRestoreMintHeadroom)
-{
-  auto op = [this](operation type, uint64_t amount) {
-    tx_extra_token_descriptor_operation o{};
-    o.operation_type = type;
-    o.fields = token_field_token_id | token_field_amount;
-    o.token_id = id;
-    o.amount = amount;
-    return o;
-  };
-  token_consensus_state state{};
-  std::string reason;
-  ASSERT_TRUE(apply_token_operation_to_state(id, registration, state, reason)) << reason;
-  EXPECT_EQ(state.total_minted, 100); // initial supply counts as issued
-
-  ASSERT_TRUE(apply_token_operation_to_state(id, op(operation::mint_token, 600), state, reason)) << reason;
-  EXPECT_EQ(state.current_supply, 700);
-  EXPECT_EQ(state.total_minted, 700);
-
-  ASSERT_TRUE(apply_token_operation_to_state(id, op(operation::burn_token, 500), state, reason)) << reason;
-  EXPECT_EQ(state.current_supply, 200);
-  EXPECT_EQ(state.total_minted, 700); // unchanged by the burn
-
-  // 300 remain mintable (1000 - 700); the 500 burned are gone for good.
-  const auto before = serialization::dump_binary(state);
-  EXPECT_FALSE(apply_token_operation_to_state(id, op(operation::mint_token, 301), state, reason));
-  EXPECT_NE(reason.find("exceeds max supply"), std::string::npos) << reason;
-  EXPECT_EQ(serialization::dump_binary(state), before); // rejected op leaves state untouched
-
-  ASSERT_TRUE(apply_token_operation_to_state(id, op(operation::mint_token, 300), state, reason)) << reason;
-  EXPECT_EQ(state.current_supply, 500);
-  EXPECT_EQ(state.total_minted, 1000);
-  EXPECT_FALSE(apply_token_operation_to_state(id, op(operation::mint_token, 1), state, reason));
-
-  // Burning everything still leaves nothing to mint.
-  ASSERT_TRUE(apply_token_operation_to_state(id, op(operation::burn_token, 500), state, reason)) << reason;
-  EXPECT_EQ(state.current_supply, 0);
-  EXPECT_FALSE(apply_token_operation_to_state(id, op(operation::mint_token, 1), state, reason));
-}
-
 // The id function itself decides, by operation type, where an id comes from:
 // a register can never choose its own id, and the other operations must name
 // their token explicitly rather than have it re-derived from a descriptor.

@@ -2652,8 +2652,6 @@ namespace cryptonote::rpc {
   /// Returns the current state of a registered privacy token.
   /// Input:  token_id (hex-encoded 32-byte public key)
   /// Output: ticker, full_name, owner, current_supply, total_max_supply,
-  ///         total_minted (cumulative issuance; never reduced by burns),
-  ///         remaining_mintable (total_max_supply - total_minted),
   ///         decimal_point, operation_count
   struct GET_TOKEN_INFO : PUBLIC
   {
