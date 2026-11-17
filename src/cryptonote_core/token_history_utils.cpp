@@ -187,6 +187,15 @@ bool validate_token_descriptor_operation(const tx_extra_token_descriptor_operati
     return false;
   }
 
+  // Each operation must carry the fields it needs and nothing else. A field an
+  // operation does not use is never validated (e.g. a descriptor inside a mint
+  // or burn, which apply_token_operation_to_state ignores), yet it is stored on
+  // chain and served by RPC as if it described the token.
+  auto carries_only = [&op](uint8_t allowed) {
+    return (op.fields & static_cast<uint8_t>(~allowed)) == 0;
+  };
+  constexpr const char* unused_field = "token descriptor operation sets a field its operation type does not use";
+
   switch (op.operation_type)
   {
     case token_descriptor_operation_type::register_token:
@@ -200,6 +209,11 @@ bool validate_token_descriptor_operation(const tx_extra_token_descriptor_operati
         reason = "register_token must not carry an explicit token_id; it is derived from the descriptor";
         return false;
       }
+      if (!carries_only(token_field_descriptor | token_field_token_id_salt | token_field_amount_commitment))
+      {
+        reason = unused_field;
+        return false;
+      }
       break;
 
     case token_descriptor_operation_type::mint_token:
@@ -209,12 +223,22 @@ bool validate_token_descriptor_operation(const tx_extra_token_descriptor_operati
         reason = "token mint/burn operation requires non-zero amount";
         return false;
       }
+      if (!carries_only(token_field_token_id | token_field_amount | token_field_amount_commitment))
+      {
+        reason = unused_field;
+        return false;
+      }
       break;
 
     case token_descriptor_operation_type::update_token:
       if (!op.field_is_set(token_field_descriptor))
       {
         reason = "update_token operation requires descriptor field";
+        return false;
+      }
+      if (!carries_only(token_field_descriptor | token_field_token_id))
+      {
+        reason = unused_field;
         return false;
       }
       break;

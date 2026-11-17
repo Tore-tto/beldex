@@ -6,6 +6,7 @@
 #include "serialization/string.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/token_descriptor_operation_utils.h"
+#include "cryptonote_basic/token_descriptor.h"
 #include "ringct/rctSigs.h"
 #include "ringct/rctOps.h"
 #include "random_path.h"
@@ -445,6 +446,94 @@ TEST_F(TokenSecurity, BlockAllowsOneRegisterMintOrUpdatePerToken)
     native.type = txtype::standard;
     EXPECT_TRUE(check_block_token_op_exclusivity(native, seen, reason)) << reason;
     EXPECT_TRUE(seen.empty());
+  }
+}
+
+TEST_F(TokenSecurity, MetaInfoMustBeUtf8)
+{
+  std::string error;
+  auto d = registration.descriptor;
+  for (const std::string ok : {std::string{""}, std::string{"Website: priv.io, Telegram: @priv"},
+                               std::string{"\xe0\xae\xb5\xe0\xae\xa3\xe0\xae\x95\xe0\xaf\x8d\xe0\xae\x95\xe0\xae\xae\xe0\xaf\x8d"},
+                               std::string{"\xf0\x9f\x9a\x80"}})
+  {
+    d.meta_info = ok;
+    EXPECT_TRUE(validate_token_descriptor_for_registration(d, error)) << error;
+  }
+  // Raw bytes, an overlong '/', a UTF-16 surrogate, a code point past U+10FFFF
+  // and a truncated sequence.
+  for (const std::string bad : {std::string{"bad \xff\xfe bytes"}, std::string{"\xc0\xaf"},
+                                std::string{"\xed\xa0\x80"}, std::string{"\xf4\x90\x80\x80"},
+                                std::string{"\xe2\x82"}})
+  {
+    d.meta_info = bad;
+    EXPECT_FALSE(validate_token_descriptor_for_registration(d, error));
+    EXPECT_NE(error.find("UTF-8"), std::string::npos) << error;
+  }
+
+  // The same rule binds an update, which replaces meta_info on chain.
+  token_consensus_state state{};
+  std::string reason;
+  ASSERT_TRUE(apply_token_operation_to_state(id, registration, state, reason)) << reason;
+  auto update = registration;
+  update.operation_type = operation::update_token;
+  update.fields |= token_field_token_id;
+  update.token_id = id;
+  update.descriptor.meta_info = "bad \xff\xfe bytes";
+  EXPECT_FALSE(apply_token_operation_to_state(id, update, state, reason));
+  EXPECT_NE(reason.find("UTF-8"), std::string::npos) << reason;
+}
+
+TEST_F(TokenSecurity, OperationsCarryOnlyTheirOwnFields)
+{
+  // The wallet's layouts are accepted.
+  std::string reason;
+  for (size_t kind = 0; kind < 4; ++kind)
+    ASSERT_TRUE(validate(make_tx(kind), reason)) << kind << ": " << reason;
+
+  auto check = [](tx_extra_token_descriptor_operation op) {
+    std::string reason;
+    EXPECT_FALSE(validate_token_descriptor_operation(op, reason));
+    EXPECT_NE(reason.find("does not use"), std::string::npos) << reason;
+  };
+  auto mint_like = [this](operation type) {
+    tx_extra_token_descriptor_operation op{};
+    op.operation_type = type;
+    op.fields = token_field_token_id | token_field_amount;
+    op.token_id = id;
+    op.amount = 1;
+    return op;
+  };
+
+  // A descriptor riding along on a mint or burn, e.g. advertising another
+  // token's ticker, or a salt that only a registration uses.
+  for (operation type : {operation::mint_token, operation::burn_token})
+  {
+    SCOPED_TRACE(static_cast<int>(type));
+    auto op = mint_like(type);
+    op.fields |= token_field_descriptor;
+    op.descriptor = registration.descriptor;
+    op.descriptor.ticker = "BDX";
+    check(op);
+    op = mint_like(type);
+    op.fields |= token_field_token_id_salt;
+    check(op);
+  }
+  // An update has no amount or commitment.
+  {
+    auto op = registration;
+    op.operation_type = operation::update_token;
+    op.fields |= token_field_token_id | token_field_amount;
+    op.token_id = id;
+    op.amount = 1;
+    check(op);
+  }
+  // A registration has no amount (its supply is in the descriptor).
+  {
+    auto op = registration;
+    op.fields |= token_field_amount;
+    op.amount = 1;
+    check(op);
   }
 }
 } // namespace
