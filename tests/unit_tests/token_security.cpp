@@ -287,4 +287,39 @@ TEST_F(TokenSecurity, DuplicateOperationsRejectedAtBothValidationLayers)
     EXPECT_NE(reason.find("exactly one"), std::string::npos) << reason;
   }
 }
+
+TEST_F(TokenSecurity, ReusedTransactionObjectDoesNotCarryTokenSections)
+{
+  // A native transaction with no privacy-token content.
+  transaction native{};
+  native.version = txversion::v4_tx_types;
+  native.type = txtype::standard;
+  txin_to_key in{};
+  in.key_offsets = {1};
+  native.vin.emplace_back(in);
+  native.vout.push_back(tx_out{0, txout_to_key{rct::rct2pk(rct::scalarmultBase(mask))}});
+  native.output_unlock_times.resize(native.vout.size());
+  native.rct_signatures.type = rct::RCTType::Null;
+  const std::string native_blob = serialization::dump_binary(native);
+
+  // Parse it into an object that still holds a token transaction's
+  // signatures and proofs, as happens when one object is reused per blob.
+  transaction reused = make_tx(1);
+  reused.zy_sig.emplace_back(rct::ZY_sig{});
+  ASSERT_FALSE(reused.token_proofs.empty());
+
+  ASSERT_NO_THROW(serialization::parse_binary(native_blob, reused));
+  EXPECT_TRUE(reused.token_proofs.empty());
+  EXPECT_TRUE(reused.zy_sig.empty());
+  EXPECT_FALSE(tx_has_privacy_token_content(reused));
+  EXPECT_EQ(serialization::dump_binary(reused), native_blob);
+
+  // The pruned parse path must not keep them either.
+  transaction reused_base = make_tx(1);
+  reused_base.zy_sig.emplace_back(rct::ZY_sig{});
+  serialization::binary_string_unarchiver ba{native_blob};
+  ASSERT_NO_THROW(reused_base.serialize_base(ba));
+  EXPECT_TRUE(reused_base.token_proofs.empty());
+  EXPECT_TRUE(reused_base.zy_sig.empty());
+}
 } // namespace

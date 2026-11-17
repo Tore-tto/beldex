@@ -648,11 +648,12 @@ namespace cryptonote
       // moneromooo ... only because I <3 him.
       std::vector<uint64_t> need_tx_indices;
 
-      transaction tx;
       crypto::hash tx_hash;
 
       for(auto& tx_blob: arg.b.txs)
       {
+        // Fresh object per blob so no state carries over between transactions.
+        transaction tx;
         if(parse_and_validate_tx_from_blob(tx_blob, tx))
         {
           try

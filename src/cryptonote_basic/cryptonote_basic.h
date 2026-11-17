@@ -336,6 +336,8 @@ namespace cryptonote
       {
         set_hash_valid(false);
         set_blob_size_valid(false);
+        zy_sig.clear();
+        token_proofs.clear();
       }
 
       unsigned int start_pos = 0;
@@ -457,6 +459,13 @@ namespace cryptonote
     template<class Archive>
     void serialize_base(Archive& ar)
     {
+      // A pruned parse never reads the prunable token sections; drop any
+      // left over from a previous use of this object.
+      if (Archive::is_deserializer)
+      {
+        zy_sig.clear();
+        token_proofs.clear();
+      }
       serialization::value(ar, static_cast<transaction_prefix&>(*this));
 
       if (version != txversion::v1)
