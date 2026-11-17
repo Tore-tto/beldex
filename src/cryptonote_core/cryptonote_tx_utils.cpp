@@ -84,6 +84,30 @@ namespace cryptonote
     }
     LOG_PRINT_L2("destinations include " << num_stdaddresses << " standard addresses and " << num_subaddresses << " subaddresses");
   }
+  //---------------------------------------------------------------
+  // A tx carrying privacy-token content must keep the plain tx pubkey R = s*G:
+  // the zy_balance_proof binds itself to tx_key.sec against that relation (see
+  // double_schnorr_sig_s), and a verifier cannot check the R = s*D form used
+  // for a single subaddress destination.
+  static bool tx_has_zyphora_content(const beldex_construct_tx_params& tx_params, const std::vector<tx_source_entry>& sources, const std::vector<tx_destination_entry>& destinations)
+  {
+    return tx_params.tx_type == txtype::register_privacy_token ||
+        tx_params.tx_type == txtype::mint_token ||
+        std::any_of(sources.begin(), sources.end(), [](const tx_source_entry& s) { return s.is_zyphora(); }) ||
+        std::any_of(destinations.begin(), destinations.end(), [](const tx_destination_entry& d) { return d.is_zyphora(); });
+  }
+  //---------------------------------------------------------------
+  // We don't need additional tx keys if:
+  //   - all the destinations are standard addresses, or
+  //   - there's only one destination which is a subaddress, and the tx pubkey
+  //     can be R = s*D for it.
+  // A privacy-token tx cannot use R = s*D (see above), so there every
+  // subaddress destination needs its own key; with R = s*G alone the recipient
+  // derives a*R, the sender derives s*C, and the output is never found.
+  static bool need_additional_tx_keys(size_t num_stdaddresses, size_t num_subaddresses, bool has_zyphora_content)
+  {
+    return num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1 || has_zyphora_content);
+  }
 
   keypair get_deterministic_keypair_from_height(uint64_t height)
   {
@@ -939,21 +963,11 @@ namespace cryptonote
     account_public_address single_dest_subaddress;
     classify_addresses(destinations, change_addr, num_stdaddresses, num_subaddresses, single_dest_subaddress);
 
-    // HF21: the zy_balance_proof binds itself to tx_key.sec against the
-    // *plain* relation tx_pub_key == tx_key.sec*G (see double_schnorr_sig_s).
-    // The R=s*D compression below breaks that relation (R becomes
-    // tx_key.sec*D instead), which a third-party verifier has no way to
-    // check since D is the recipient's private subaddress. So any tx
-    // carrying privacy-token content must keep the plain R=tx_key*G
-    // form.
-    bool tx_has_zyphora_content =
-        tx_params.tx_type == txtype::register_privacy_token ||
-        tx_params.tx_type == txtype::mint_token ||
-        std::any_of(sources.begin(), sources.end(), [](const tx_source_entry& s) { return s.is_zyphora(); }) ||
-        std::any_of(destinations.begin(), destinations.end(), [](const tx_destination_entry& d) { return d.is_zyphora(); });
+    // Privacy-token content forces the plain R=tx_key*G form.
+    const bool has_zyphora_content = tx_has_zyphora_content(tx_params, sources, destinations);
 
     // if this is a single-destination transfer to a subaddress, we set the tx pubkey to R=s*D
-    if (num_stdaddresses == 0 && num_subaddresses == 1 && !tx_has_zyphora_content)
+    if (num_stdaddresses == 0 && num_subaddresses == 1 && !has_zyphora_content)
     {
       txkey_pub = rct::rct2pk(hwdev.scalarmultKey(rct::pk2rct(single_dest_subaddress.m_spend_public_key), rct::sk2rct(tx_key)));
     }
@@ -966,10 +980,7 @@ namespace cryptonote
 
     std::vector<crypto::public_key> additional_tx_public_keys;
 
-    // we don't need to include additional tx keys if:
-    //   - all the destinations are standard addresses
-    //   - there's only one destination which is a subaddress
-    bool need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
+    bool need_additional_txkeys = need_additional_tx_keys(num_stdaddresses, num_subaddresses, has_zyphora_content);
     if (need_additional_txkeys)
       CHECK_AND_ASSERT_MES(destinations.size() == additional_tx_keys.size(), false, "Wrong amount of additional tx keys");
 
@@ -1919,7 +1930,7 @@ namespace cryptonote
       size_t num_subaddresses = 0;
       account_public_address single_dest_subaddress;
       classify_addresses(destinations, change_addr, num_stdaddresses, num_subaddresses, single_dest_subaddress);
-      bool need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
+      bool need_additional_txkeys = need_additional_tx_keys(num_stdaddresses, num_subaddresses, tx_has_zyphora_content(tx_params, sources, destinations));
       if (need_additional_txkeys)
       {
         additional_tx_keys.clear();
