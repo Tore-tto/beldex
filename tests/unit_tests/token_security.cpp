@@ -9,6 +9,7 @@
 #include "cryptonote_basic/token_descriptor_operation_utils.h"
 #include "ringct/rctSigs.h"
 #include "ringct/rctOps.h"
+#include "ringct/bulletproofs_plus.h"
 #include "random_path.h"
 
 namespace {
@@ -337,5 +338,83 @@ TEST_F(TokenSecurity, DuplicateOperationsRejectedAtBothValidationLayers)
     EXPECT_FALSE(rct::verTokenProofs(tx, {}, {}, reason));
     EXPECT_NE(reason.find("exactly one"), std::string::npos) << reason;
   }
+}
+// A tx with token outputs may have at most TX_BULLETPROOF_PLUS_MAX_OUTPUTS
+// outputs in total, native and token together.
+TEST(TokenOutputLimit, TooManyOutputsRejectedBeforeAnyProofIsRead)
+{
+  const size_t max = TX_BULLETPROOF_PLUS_MAX_OUTPUTS;
+  auto make = [](size_t native, size_t token) {
+    transaction tx{};
+    tx.version = txversion::v4_tx_types;
+    tx.type = txtype::standard;
+    tx.vout.assign(native, tx_out{0, txout_to_key{}});
+    tx.vout.insert(tx.vout.end(), token, tx_out{0, tx_out_zyphora{}});
+    return tx;
+  };
+  auto over_limit = [](const transaction& tx) {
+    std::string reason;
+    EXPECT_FALSE(rct::verTokenProofs(tx, {}, {}, reason)); // no proofs: fails either way
+    return reason.find("too many outputs") != std::string::npos;
+  };
+  EXPECT_TRUE(over_limit(make(0, max + 1)));
+  EXPECT_TRUE(over_limit(make(2, max - 1)));  // each kind is under the limit, the total is not
+  EXPECT_TRUE(over_limit(make(max, 1)));
+  EXPECT_FALSE(over_limit(make(0, max)));
+  EXPECT_FALSE(over_limit(make(2, max - 2)));
+}
+
+// The verifier itself refuses a proof over more commitments than its generator
+// tables cover, whoever the caller is.
+TEST(TokenOutputLimit, BulletproofPlusVerifierBoundsCommitmentCount)
+{
+  const size_t n = TX_BULLETPROOF_PLUS_MAX_OUTPUTS;
+  std::vector<uint64_t> amounts(n, 1);
+  rct::keyV masks(n);
+  for (auto& m : masks) m = rct::skGen();
+  auto proof = rct::bulletproof_plus_PROVE(amounts, masks);
+  ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+
+  // One more commitment, with the extra round such a proof would declare.
+  proof.V.push_back(proof.V.front());
+  proof.L.push_back(proof.L.front());
+  proof.R.push_back(proof.R.front());
+  EXPECT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+}
+
+// The weight of a pruned token tx must be computable: token inputs may come
+// first, and token outputs do not count towards the native range proof.
+TEST(TokenOutputLimit, PrunedWeightHandlesTokenInputsAndOutputs)
+{
+  transaction tx{};
+  tx.version = txversion::v4_tx_types;
+  tx.type = txtype::standard;
+  tx.vin.emplace_back(txin_zy_input{{1, 2, 3}, {}});
+  txin_to_key native_in{};
+  native_in.key_offsets.assign(10, 1);
+  tx.vin.emplace_back(native_in);
+  for (size_t i = 0; i < 3; ++i) // pads the native proof to 4
+    tx.vout.push_back(tx_out{0, txout_to_key{}});
+  for (size_t i = 3; i < TX_BULLETPROOF_PLUS_MAX_OUTPUTS; ++i)
+    tx.vout.push_back(tx_out{0, tx_out_zyphora{}});
+  tx.output_unlock_times.resize(tx.vout.size());
+  tx.rct_signatures.type = rct::RCTType::BulletproofPlus;
+  tx.rct_signatures.ecdhInfo.resize(3);
+  tx.rct_signatures.outPk.resize(3);
+  tx.pruned = true;
+
+  uint64_t weight = 0;
+  ASSERT_NO_THROW(weight = get_pruned_transaction_weight(tx));
+  EXPECT_NE(weight, std::numeric_limits<uint64_t>::max());
+  EXPECT_GT(weight, serialization::dump_binary(tx).size());
+
+  // More native outputs than the native proof allows is reported, not thrown.
+  for (size_t i = 0; i < TX_BULLETPROOF_MAX_OUTPUTS; ++i)
+    tx.vout.push_back(tx_out{0, txout_to_key{}});
+  tx.output_unlock_times.resize(tx.vout.size());
+  tx.rct_signatures.ecdhInfo.resize(3 + TX_BULLETPROOF_MAX_OUTPUTS);
+  tx.rct_signatures.outPk.resize(3 + TX_BULLETPROOF_MAX_OUTPUTS);
+  EXPECT_NO_THROW(weight = get_pruned_transaction_weight(tx));
+  EXPECT_EQ(weight, std::numeric_limits<uint64_t>::max());
 }
 } // namespace

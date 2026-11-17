@@ -11432,6 +11432,19 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     LOG_PRINT_L2("Added dummy native output for burn_token to satisfy the HF17 two-output minimum");
   }
 
+  // A tx with privacy-token outputs may have at most
+  // TX_BULLETPROOF_PLUS_MAX_OUTPUTS outputs in total, native and token together
+  // (change included). Fail here, before any proof is generated, rather than
+  // build a tx the network rejects.
+  const auto too_many_token_tx_outputs = [](size_t outputs) {
+    return "Too many outputs for a privacy-token transaction: " + std::to_string(outputs) +
+        " including change, the maximum is " + std::to_string(cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS) +
+        " (native and token together). Send to fewer recipients per transaction.";
+  };
+  const bool has_token_dsts = std::any_of(splitted_dsts.begin(), splitted_dsts.end(), [](const auto& d) { return d.is_zyphora(); });
+  THROW_WALLET_EXCEPTION_IF(has_token_dsts && splitted_dsts.size() > cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS,
+      error::wallet_internal_error, too_many_token_tx_outputs(splitted_dsts.size()));
+
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
   rct::multisig_out msout;
@@ -11454,6 +11467,9 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
 
   LOG_PRINT_L2("constructed tx, r="<<r);
   THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sources, dsts, unlock_time, m_nettype);
+  // Construction can add outputs of its own, so check the finished tx as well.
+  THROW_WALLET_EXCEPTION_IF(tx.has_zyphora_outputs() && tx.vout.size() > cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS,
+      error::wallet_internal_error, too_many_token_tx_outputs(tx.vout.size()));
   THROW_WALLET_EXCEPTION_IF(upper_transaction_weight_limit <= get_transaction_weight(tx), error::tx_too_big, tx, upper_transaction_weight_limit);
 
   // work out the permutation done on sources

@@ -1899,6 +1899,17 @@ namespace rct {
                         std::string& reason)
     {
       try {
+        // A tx with token outputs may have at most
+        // TX_BULLETPROOF_PLUS_MAX_OUTPUTS outputs in total, native and token
+        // together. This also keeps the aggregated token range proof within
+        // what the Bulletproof+ verifier supports.
+        if (tx.has_zyphora_outputs() && tx.vout.size() > cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS)
+        {
+            reason = "too many outputs in a privacy-token tx (" + std::to_string(tx.vout.size()) + ", maximum "
+                   + std::to_string(cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS) + " native and token together)";
+            return false;
+        }
+
         // ── 0. Prevalidate the proof set is well-formed ──────────────────────
         // token_proofs is a self-describing serialized vector, so serialization
         // constrains neither WHICH proofs appear nor how many. Reject duplicates
