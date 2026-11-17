@@ -480,6 +480,26 @@ bool pop_block_and_rewind_tokens(BlockchainDB& db, block& blk, std::vector<trans
   return rewind_tokens_for_height(db, height, reason);
 }
 
+bool check_block_token_op_exclusivity(const transaction& tx, std::unordered_set<crypto::token_id>& seen, std::string& reason)
+{
+  if (tx.type != txtype::register_privacy_token && tx.type != txtype::mint_token &&
+      tx.type != txtype::update_token)
+    return true;
+
+  size_t op_index = 0;
+  tx_extra_token_descriptor_operation op{};
+  while (get_token_descriptor_operation_from_tx_extra(tx.extra, op, op_index++))
+  {
+    const crypto::token_id token_id = get_or_calculate_token_id(op);
+    if (!seen.insert(token_id).second)
+    {
+      reason = "block contains more than one register/mint/update operation on the same token";
+      return false;
+    }
+  }
+  return true;
+}
+
 bool validate_token_transaction_fees(const transaction& tx, hf hf_version, network_type nettype, std::string& reason)
 {
   using operation = token_descriptor_operation_type;

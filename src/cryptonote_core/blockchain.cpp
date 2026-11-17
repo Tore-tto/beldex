@@ -4962,6 +4962,8 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
 
   std::vector<std::pair<transaction, blobdata>> txs;
   std::unordered_map<crypto::token_id, token_consensus_state> pending_token_states;
+  // Tokens that already have a register/mint/update operation in this block.
+  std::unordered_set<crypto::token_id> exclusive_token_ops;
   key_images_container keys;
 
   uint64_t fee_summary = 0;
@@ -5073,6 +5075,17 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
     // Gather and validate token descriptor operations carried in tx.extra.
     if (get_network_version() >= feature::PRIVACY_TOKENS)
     {
+      {
+        std::string exclusivity_reason;
+        if (!check_block_token_op_exclusivity(tx, exclusive_token_ops, exclusivity_reason))
+        {
+          MERROR_VER("Block with id: " << id << " rejected at tx " << tx_id << ": " << exclusivity_reason);
+          bvc.m_verifivation_failed = true;
+          return_tx_to_pool(txs);
+          return false;
+        }
+      }
+
       size_t op_index = 0;
       tx_extra_token_descriptor_operation op{};
       while (cryptonote::get_token_descriptor_operation_from_tx_extra(tx.extra, op, op_index++))

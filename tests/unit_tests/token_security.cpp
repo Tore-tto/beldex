@@ -403,4 +403,48 @@ TEST_F(TokenSecurity, PoppingABlockAlsoRewindsItsTokenState)
   std::string undo;
   EXPECT_FALSE(static_cast<BlockchainDB&>(db).get_token_undo(top_height, undo));
 }
+
+TEST_F(TokenSecurity, BlockAllowsOneRegisterMintOrUpdatePerToken)
+{
+  // Each operation alone passes the per-transaction validator, which only sees
+  // committed state; the block-level rule is what stops them being combined.
+  std::string reason;
+  for (size_t kind = 0; kind < 4; ++kind)
+    ASSERT_TRUE(validate(make_tx(kind), reason)) << kind << ": " << reason;
+
+  const size_t update = 2, mint = 1, burn = 3, reg = 0;
+  // Ownership transfer followed by a mint signed by the previous owner.
+  {
+    std::unordered_set<crypto::token_id> seen;
+    ASSERT_TRUE(check_block_token_op_exclusivity(make_tx(update), seen, reason)) << reason;
+    EXPECT_FALSE(check_block_token_op_exclusivity(make_tx(mint), seen, reason));
+    EXPECT_NE(reason.find("more than one"), std::string::npos) << reason;
+  }
+  // Every ordered pair of register/mint/update on one token is rejected.
+  for (size_t first : {mint, update})
+    for (size_t second : {mint, update})
+    {
+      SCOPED_TRACE(std::to_string(first) + "," + std::to_string(second));
+      std::unordered_set<crypto::token_id> seen;
+      ASSERT_TRUE(check_block_token_op_exclusivity(make_tx(first), seen, reason)) << reason;
+      EXPECT_FALSE(check_block_token_op_exclusivity(make_tx(second), seen, reason));
+    }
+  // Burn is exempt, as in the mempool, and a different token is unaffected.
+  {
+    std::unordered_set<crypto::token_id> seen;
+    ASSERT_TRUE(check_block_token_op_exclusivity(make_tx(mint), seen, reason)) << reason;
+    EXPECT_TRUE(check_block_token_op_exclusivity(make_tx(burn), seen, reason)) << reason;
+    EXPECT_TRUE(check_block_token_op_exclusivity(make_tx(burn), seen, reason)) << reason;
+    EXPECT_TRUE(check_block_token_op_exclusivity(make_tx(reg), seen, reason)) << reason;
+  }
+  // A native transaction carries no token operation.
+  {
+    std::unordered_set<crypto::token_id> seen;
+    transaction native{};
+    native.version = txversion::v4_tx_types;
+    native.type = txtype::standard;
+    EXPECT_TRUE(check_block_token_op_exclusivity(native, seen, reason)) << reason;
+    EXPECT_TRUE(seen.empty());
+  }
+}
 } // namespace
