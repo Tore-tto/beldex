@@ -1387,17 +1387,10 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   // before the privacy-token branch the DB refused any non-txout_to_key output outright.
   for (const auto& out : b.miner_tx.vout)
     CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(out.target), false, "coinbase transaction output has a non-native target type");
+
   CHECK_AND_ASSERT_MES(b.miner_tx.zy_sig.empty() && b.miner_tx.token_proofs.empty(), false, "coinbase transaction carries privacy-token signatures or proofs");
 
   CHECK_AND_ASSERT_MES(b.miner_tx.unlock_time == height + MINED_MONEY_UNLOCK_WINDOW, false, "coinbase transaction transaction has the wrong unlock time=" << b.miner_tx.unlock_time << ", expected " << height + MINED_MONEY_UNLOCK_WINDOW);
-
-  // A coinbase carries no proofs, so every output must be a plain txout_to_key whose commitment
-  // the node derives itself from the visible amount. Any other target (in particular a
-  // tx_out_zyphora, which carries its own commitment and blinded token id) would be stored
-  // unproven. No fork gate is needed: no existing block can contain such an output, because
-  // add_output rejected every non-txout_to_key target before privacy tokens were added.
-  for (const auto& o : b.miner_tx.vout)
-    CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(o.target), false, "coinbase transaction has a non-txout_to_key output");
 
   if (hf_version >= hf::hf13_checkpointing)
   {

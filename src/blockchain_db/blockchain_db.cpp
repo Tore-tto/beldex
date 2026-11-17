@@ -170,17 +170,12 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
 
     const bool is_zyphora = std::holds_alternative<cryptonote::tx_out_zyphora>(tx.vout[i].target);
 
-    // Defence in depth for prevalidate_miner_transaction: a coinbase has no proofs, so a token
-    // output in it would be stored with an unproven commitment and blinded token id.
-    CHECK_AND_ASSERT_THROW_MES(!(miner_tx && is_zyphora),
-      "coinbase output #" << i << " must be txout_to_key (tx " << tx_hash << ")");
-
     // miner v2 txes have their coinbase output in one single out to save space,
     // and we store them as rct outputs with an identity mask
     // Defence in depth for Blockchain::prevalidate_miner_transaction: add_output stores a zyphora
     // output's own commitment and token tag, which nothing proves for a coinbase.
     CHECK_AND_ASSERT_THROW_MES(!(miner_tx && is_zyphora),
-        "coinbase transaction " << tx_hash << " has a tx_out_zyphora output");
+        "coinbase transaction " << tx_hash << " has a tx_out_zyphora output at index " << i << ", which is not allowed");
 
     if (miner_tx && tx.version >= cryptonote::txversion::v2_ringct)
     {
