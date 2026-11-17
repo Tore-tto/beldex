@@ -4579,6 +4579,12 @@ bool Blockchain::check_tx_input_zy(const txin_zy_input& txin, const crypto::hash
         return false;
       }
 
+      if (blinded_token_id == crypto::null_tid)
+      {
+        MERROR_VER("Zyphora input ring member is a native output, not a privacy-token output");
+        return false;
+      }
+
       m_output_keys.push_back(rct::ctkey({rct::pk2rct(pubkey), commitment}));
       m_output_blinded_token_ids.push_back(blinded_token_id);
       return true;
