@@ -1864,13 +1864,16 @@ namespace cryptonote
                   << " tx");
           }
 
-          // ── HF21: token ownership proof for mint_token ──────────────────────
+          // ── Token ownership proof for register, mint and update ─────────────
+          // On register the signer is the owner named in the descriptor (the
+          // wallet only registers tokens owned by its own spend key). It stops
+          // anyone else registering the same token id with different outputs.
           // No token balance proof is generated: mint mints the token from
           // nothing (no token inputs), so there is no token in==out equation.
           // The minted amount is constrained by the amount-commitment proof
           // above + the supply cap; the native (BDX) side that pays the fee is
           // balanced by the standard RingCT signature (genRctSimple) below.
-          if (tx_params.tx_type == txtype::mint_token || tx_params.tx_type == txtype::update_token)
+          if (tx_params.tx_type == txtype::register_privacy_token || tx_params.tx_type == txtype::mint_token || tx_params.tx_type == txtype::update_token)
           {
             // Prove the token owner authorized this emission (Schnorr over the
             // owner's spend key, verified on-chain against descriptor.owner).
@@ -1881,7 +1884,7 @@ namespace cryptonote
               return false;
             }
             tx.token_proofs.push_back(std::move(ownership_proof));
-            MINFO("Attached ownership proof for mint_token/update_token tx: " << get_transaction_hash(tx));
+            MINFO("Attached ownership proof for register/mint_token/update_token tx: " << get_transaction_hash(tx));
           }
           } // if (!zero_secret_key)
 

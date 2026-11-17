@@ -1,5 +1,6 @@
 // Copyright (c) 2026, The Beldex Project
 #include "gtest/gtest.h"
+#include <algorithm>
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "cryptonote_core/token_history_utils.h"
 #include "serialization/binary_utils.h"
@@ -114,7 +115,7 @@ protected:
         throw std::runtime_error("Cannot generate composition proof");
       tx.token_proofs.emplace_back(proof);
     }
-    if (kind == 1 || kind == 2)
+    if (kind != 3) // register, mint and update are signed by the owner
     {
       rct::token_operation_ownership_proof proof{};
       if (!crypto::generate_schnorr_sig(msg, rct::pk2rct(registration.descriptor.owner), owner_secret, proof.sig))
@@ -253,6 +254,56 @@ TEST_F(TokenSecurity, TokenIdSourceIsFixedByOperationType)
   auto undefined = registration;
   undefined.operation_type = operation::undefined;
   EXPECT_EQ(get_or_calculate_token_id(undefined), crypto::null_tid);
+}
+
+// A register must be signed by the owner named in its descriptor, over the tx
+// prefix (which covers the outputs). The descriptor and salt are public once a
+// register is broadcast, so the signature is what ties a token id to the
+// outputs its owner chose.
+TEST_F(TokenSecurity, RegisterRequiresOwnerSignatureOverThisTransaction)
+{
+  auto ownership = [](transaction& tx) -> rct::token_operation_ownership_proof& {
+    for (auto& proof : tx.token_proofs)
+      if (auto* p = std::get_if<rct::token_operation_ownership_proof>(&proof))
+        return *p;
+    throw std::runtime_error("no ownership proof");
+  };
+  auto expect_rejected = [this](const transaction& tx) {
+    std::string reason;
+    EXPECT_FALSE(validate(tx, reason));
+    EXPECT_NE(reason.find("ownership proof for registration"), std::string::npos) << reason;
+  };
+  std::string reason;
+  const auto valid = make_tx(0);
+  ASSERT_TRUE(validate(valid, reason)) << reason;
+
+  // No ownership proof at all.
+  auto missing = valid;
+  missing.token_proofs.erase(std::remove_if(missing.token_proofs.begin(), missing.token_proofs.end(),
+      [](const auto& p) { return std::holds_alternative<rct::token_operation_ownership_proof>(p); }),
+      missing.token_proofs.end());
+  expect_rejected(missing);
+
+  // Signed by a key other than descriptor.owner.
+  crypto::hash prefix;
+  get_transaction_prefix_hash(valid, prefix);
+  const rct::key other_secret = rct::d2h(99);
+  auto wrong_signer = valid;
+  ASSERT_TRUE(crypto::generate_schnorr_sig(rct::hash2rct(prefix), rct::scalarmultBase(other_secret),
+      other_secret, ownership(wrong_signer).sig));
+  expect_rejected(wrong_signer);
+
+  // The owner's signature from one register does not carry over to a tx with
+  // the same descriptor but a different prefix, even when everything that
+  // needs no owner key (here the amount-commitment proof) is redone for it.
+  auto other_prefix = valid;
+  other_prefix.output_unlock_times[0] = 1;
+  get_transaction_prefix_hash(other_prefix, prefix);
+  for (auto& proof : other_prefix.token_proofs)
+    if (auto* p = std::get_if<rct::token_operation_proof>(&proof))
+      ASSERT_TRUE(crypto::generate_linear_composition_proof(rct::hash2rct(prefix),
+          rct::scalarmultBase(mask), mask, rct::zero(), p->composition_proof));
+  expect_rejected(other_prefix);
 }
 
 TEST_F(TokenSecurity, EmissionCannotUseBurnCommitmentExemption)

@@ -1943,7 +1943,7 @@ namespace rct {
 
             // Token-operation proofs only belong to their originating tx kinds:
             //   token_operation_proof          -> register_privacy_token / mint_token / burn_token
-            //   token_operation_ownership_proof -> mint_token / update_token
+            //   token_operation_ownership_proof -> register_privacy_token / mint_token / update_token
             // (see construct_tx_with_tx_key.) burn_token also carries an
             // amount-commitment composition_proof: it binds the publicly-declared
             // burned amount to the TDO commitment that the zy_balance_proof then
@@ -1951,7 +1951,8 @@ namespace rct {
             const bool aop_allowed       = tx.type == cryptonote::txtype::register_privacy_token
                                         || tx.type == cryptonote::txtype::mint_token
                                         || tx.type == cryptonote::txtype::burn_token;
-            const bool ownership_allowed = tx.type == cryptonote::txtype::mint_token
+            const bool ownership_allowed = tx.type == cryptonote::txtype::register_privacy_token
+                                        || tx.type == cryptonote::txtype::mint_token
                                         || tx.type == cryptonote::txtype::update_token;
             if (n_token_op  != 0 && !aop_allowed)
             {
@@ -1960,7 +1961,7 @@ namespace rct {
             }
             if (n_ownership != 0 && !ownership_allowed)
             {
-                reason = "token_operation_ownership_proof present on a tx that is not mint/update";
+                reason = "token_operation_ownership_proof present on a tx that is not deploy/mint/update";
                 return false;
             }
 
@@ -2190,7 +2191,7 @@ namespace rct {
         }
 
         // ── 3. Verify ownership proof for token operations ────────────────────
-        // For deploy/mint/burn, verify the Schnorr signature against descriptor.owner.
+        // For deploy/mint/update, the Schnorr signature is checked against descriptor.owner.
         for (const auto& proof : tx.token_proofs)
         {
             if (const auto* op = std::get_if<rct::token_operation_ownership_proof>(&proof))
