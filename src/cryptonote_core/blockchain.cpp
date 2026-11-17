@@ -654,22 +654,31 @@ bool Blockchain::init(BlockchainDB* db, sqlite3 *bns_db, const network_type nett
       ++num_popped_blocks;
       block popped_block;
       std::vector<transaction> popped_txs;
+      const bool stop_batch = m_db->batch_start();
       try
       {
-        m_db->pop_block(popped_block, popped_txs);
+        std::string rewind_reason;
+        if (!pop_block_and_rewind_tokens(*m_db, popped_block, popped_txs, &rewind_reason))
+          throw std::runtime_error("Failed to rewind token state: " + rewind_reason);
       }
       // anything that could cause this to throw is likely catastrophic,
       // so we re-throw
       catch (const std::exception& e)
       {
         MFATAL("Error popping block from blockchain: " << e.what());
+        if (stop_batch)
+          m_db->batch_abort();
         throw;
       }
       catch (...)
       {
         MFATAL("Error popping block from blockchain, throwing!");
+        if (stop_batch)
+          m_db->batch_abort();
         throw;
       }
+      if (stop_batch)
+        m_db->batch_stop();
     }
   }
   if (num_popped_blocks > 0)
@@ -842,7 +851,6 @@ block Blockchain::pop_block_from_blockchain()
 
   CHECK_AND_ASSERT_THROW_MES(m_db->height() > 1, "Cannot pop the genesis block");
   const uint64_t popped_height = m_db->height() - 1; // height of the block being popped (before pop)
-  const hf popped_hf = get_network_version(m_db->height() - 1);
 
   try
   {
@@ -861,7 +869,11 @@ block Blockchain::pop_block_from_blockchain()
     throw;
   }
 
-  if (popped_hf >= feature::PRIVACY_TOKENS)
+  // Always rewind: the undo record is keyed by height and is absent when no
+  // token operations were applied there, so this is a no-op for such blocks.
+  // Do not gate on get_network_version(popped_height): that reflects the
+  // current fork table, which can differ from the rules the block was applied
+  // under, and would then skip an undo that is needed.
   {
     std::string rewind_reason;
     CHECK_AND_ASSERT_THROW_MES(

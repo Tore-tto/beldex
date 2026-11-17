@@ -47,6 +47,7 @@ bool validate_token_transaction_fees(const transaction& tx, hf hf_version, netwo
 bool load_token_state(BlockchainDB& db, const crypto::token_id& token_id, token_consensus_state& state, std::string& reason);
 bool apply_tokens_from_block(BlockchainDB& db, uint64_t height, const std::vector<transaction>& txs, std::string* reason = nullptr);
 bool rewind_tokens_for_height(BlockchainDB& db, uint64_t height, std::string* reason = nullptr);
+bool pop_block_and_rewind_tokens(BlockchainDB& db, block& blk, std::vector<transaction>& txs, std::string* reason = nullptr);
 // hf_version gates the HF22 fan-out rule (a register with non-zero supply must
 // produce >= MIN_TOKEN_MINT_OUTPUTS tx_out_zyphora outputs; mint is exempt).
 bool validate_tx_token_operations_against_db(BlockchainDB& db, const transaction& tx,

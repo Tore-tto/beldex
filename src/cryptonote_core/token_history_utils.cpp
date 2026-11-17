@@ -478,6 +478,18 @@ bool rewind_tokens_for_height(BlockchainDB& db, uint64_t height, std::string* re
   return true;
 }
 
+bool pop_block_and_rewind_tokens(BlockchainDB& db, block& blk, std::vector<transaction>& txs, std::string* reason)
+{
+  if (db.height() == 0)
+  {
+    set_reason(reason, "cannot pop a block from an empty blockchain");
+    return false;
+  }
+  const uint64_t height = db.height() - 1;
+  db.pop_block(blk, txs);
+  return rewind_tokens_for_height(db, height, reason);
+}
+
 bool validate_token_transaction_fees(const transaction& tx, hf hf_version, network_type nettype, std::string& reason)
 {
   using operation = token_descriptor_operation_type;

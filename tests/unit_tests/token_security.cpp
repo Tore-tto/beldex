@@ -394,4 +394,56 @@ TEST_F(TokenSecurity, TokenProofSetHasOneCanonicalEncoding)
     EXPECT_NE(prevalidation_reason(tx).find("without zyphora inputs"), std::string::npos);
   }
 }
+
+TEST_F(TokenSecurity, PoppingABlockAlsoRewindsItsTokenState)
+{
+  // Two stored blocks; token operations are applied for the top one exactly
+  // as block acceptance does.
+  for (uint64_t h = 0; h < 2; ++h)
+  {
+    block blk{};
+    if (h) blk.prev_id = db.get_block_hash_from_height(h - 1);
+    blk.timestamp = h;
+    blk.miner_tx.version = txversion::v2_ringct;
+    blk.miner_tx.vin.emplace_back(txin_gen{h});
+    db_wtxn_guard guard(&db);
+    db.add_block({blk, block_to_blob(blk)}, 1, 1, 1, 1, {});
+    guard.stop();
+  }
+  ASSERT_EQ(db.height(), 2u);
+  const uint64_t top_height = 1;
+
+  const transaction registration_tx = make_tx(0); // registers a second token
+  tx_extra_token_descriptor_operation new_op{};
+  ASSERT_TRUE(get_token_descriptor_operation_from_tx_extra(registration_tx.extra, new_op, 0));
+  const crypto::token_id new_id = get_or_calculate_token_id(new_op);
+  std::string reason;
+  {
+    db_wtxn_guard guard(&db);
+    ASSERT_TRUE(apply_tokens_from_block(db, top_height, {registration_tx, make_tx(1)}, &reason)) << reason;
+    guard.stop();
+  }
+  token_consensus_state state{};
+  ASSERT_TRUE(load_token_state(db, id, state, reason)) << reason;
+  ASSERT_EQ(state.current_supply, 110u);
+  ASSERT_TRUE(load_token_state(db, new_id, state, reason)) << reason;
+  ASSERT_TRUE(state.exists);
+
+  // Pop the top block the way startup does when the fork table no longer
+  // matches the stored block versions.
+  ASSERT_TRUE(db.batch_start());
+  block popped{};
+  std::vector<transaction> popped_txs;
+  ASSERT_TRUE(pop_block_and_rewind_tokens(db, popped, popped_txs, &reason)) << reason;
+  db.batch_stop();
+
+  EXPECT_EQ(db.height(), 1u);
+  ASSERT_TRUE(load_token_state(db, id, state, reason)) << reason;
+  EXPECT_TRUE(state.exists);
+  EXPECT_EQ(state.current_supply, 100u);
+  ASSERT_TRUE(load_token_state(db, new_id, state, reason)) << reason;
+  EXPECT_FALSE(state.exists);
+  std::string undo;
+  EXPECT_FALSE(static_cast<BlockchainDB&>(db).get_token_undo(top_height, undo));
+}
 } // namespace
