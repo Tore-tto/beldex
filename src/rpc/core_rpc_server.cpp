@@ -2485,7 +2485,8 @@ namespace cryptonote::rpc {
         bool cumulative,
         std::uint64_t start_height,
         std::vector<std::uint64_t> distribution,
-        std::uint64_t base)
+        std::uint64_t base,
+        std::vector<std::uint64_t> output_indices = {})
     {
       if (!cumulative && !distribution.empty())
       {
@@ -2494,56 +2495,92 @@ namespace cryptonote::rpc {
         distribution[0] -= base;
       }
 
-      return {std::move(distribution), start_height, base};
+      return {std::move(distribution), start_height, base, std::move(output_indices)};
     }
 
-    static struct {
-      std::mutex mutex;
+    // One cached amount-0 distribution per output kind (native, privacy
+    // token). The two kinds are separate buckets with separate index lists, so
+    // an answer for one must never be served for the other.
+    struct output_dist_cache_t {
       std::vector<std::uint64_t> cached_distribution;
+      // bucket rank -> real amount-0 global index, for [cached_from, cached_to].
+      // Only meaningful when has_indices is set.
+      std::vector<std::uint64_t> cached_indices;
       std::uint64_t cached_from = 0, cached_to = 0, cached_start_height = 0, cached_base = 0;
       crypto::hash cached_m10_hash = crypto::null_hash;
       crypto::hash cached_top_hash = crypto::null_hash;
       bool cached = false;
-    } output_dist_cache;
+      bool has_indices = false;
+    };
+    output_dist_cache_t output_dist_caches[2]; // [0] native, [1] token
+    std::mutex output_dist_cache_mutex;
+
+    // A request is answered once per distinct amount, in the order first
+    // asked for; a repeated amount would only repeat the same answer.
+    std::vector<uint64_t> unique_distribution_amounts(const std::vector<uint64_t>& requested)
+    {
+      std::vector<uint64_t> amounts;
+      std::unordered_set<uint64_t> seen;
+      for (uint64_t amount : requested)
+        if (seen.insert(amount).second)
+          amounts.push_back(amount);
+      return amounts;
+    }
   }
 
   namespace detail {
     std::optional<output_distribution_data> get_output_distribution(
-        const std::function<bool(uint64_t, uint64_t, uint64_t, uint64_t&, std::vector<uint64_t>&, uint64_t&)>& f,
+        const output_distribution_fetcher& f,
         uint64_t amount,
         uint64_t from_height,
         uint64_t to_height,
         const std::function<crypto::hash(uint64_t)>& get_hash,
         bool cumulative,
-        uint64_t blockchain_height)
+        uint64_t blockchain_height,
+        bool token_bucket,
+        bool want_indices)
     {
-      auto& d = output_dist_cache;
-      const std::unique_lock lock{d.mutex};
+      auto& d = output_dist_caches[token_bucket ? 1 : 0];
+      const std::unique_lock lock{output_dist_cache_mutex};
+
+      // The cache only ever holds amount 0, and it can only serve a caller
+      // that wants indices if it has them.
+      const bool usable = d.cached && amount == 0 && d.cached_from == from_height && (!want_indices || d.has_indices);
 
       crypto::hash top_hash = crypto::null_hash;
       if (d.cached_to < blockchain_height)
         top_hash = get_hash(d.cached_to);
-      if (d.cached && amount == 0 && d.cached_from == from_height && d.cached_to == to_height && d.cached_top_hash == top_hash)
-        return process_distribution(cumulative, d.cached_start_height, d.cached_distribution, d.cached_base);
+      if (usable && d.cached_to == to_height && d.cached_top_hash == top_hash)
+        return process_distribution(cumulative, d.cached_start_height, d.cached_distribution, d.cached_base,
+            want_indices ? d.cached_indices : std::vector<std::uint64_t>{});
 
-      std::vector<std::uint64_t> distribution;
+      std::vector<std::uint64_t> distribution, indices;
       std::uint64_t start_height, base;
+      bool has_indices;
 
       // see if we can extend the cache - a common case
-      bool can_extend = d.cached && amount == 0 && d.cached_from == from_height && to_height > d.cached_to && top_hash == d.cached_top_hash;
+      bool can_extend = usable && to_height > d.cached_to && top_hash == d.cached_top_hash;
       if (!can_extend)
       {
         // we kept track of the hash 10 blocks below, if it exists, so if it matches,
         // we can still pop the last 10 cached slots and try again
-        if (d.cached && amount == 0 && d.cached_from == from_height && d.cached_to - d.cached_from >= 10 && to_height > d.cached_to - 10)
+        if (usable && d.cached_to - d.cached_from >= 10 && to_height > d.cached_to - 10 && d.cached_distribution.size() > 10)
         {
           crypto::hash hash10 = get_hash(d.cached_to - 10);
           if (hash10 == d.cached_m10_hash)
           {
+            if (d.has_indices)
+            {
+              // The cached distribution is cumulative, so the outputs created in
+              // the last 10 blocks are the difference across them.
+              const auto& cd = d.cached_distribution;
+              const std::uint64_t dropped = cd[cd.size() - 1] - cd[cd.size() - 11];
+              CHECK_AND_ASSERT_MES(d.cached_indices.size() >= dropped, std::nullopt, "Cached output indices do not match cached distribution");
+              d.cached_indices.resize(d.cached_indices.size() - dropped);
+            }
             d.cached_to -= 10;
             d.cached_top_hash = hash10;
             d.cached_m10_hash = crypto::null_hash;
-            CHECK_AND_ASSERT_MES(d.cached_distribution.size() >= 10, std::nullopt, "Cached distribution size does not match cached bounds");
             for (int p = 0; p < 10; ++p)
               d.cached_distribution.pop_back();
             can_extend = true;
@@ -2552,19 +2589,27 @@ namespace cryptonote::rpc {
       }
       if (can_extend)
       {
-        std::vector<std::uint64_t> new_distribution;
-        if (!f(amount, d.cached_to + 1, to_height, start_height, new_distribution, base))
+        // Keep the cached indices complete whether or not this caller wants them.
+        has_indices = d.has_indices;
+        std::vector<std::uint64_t> new_distribution, new_indices;
+        if (!f(amount, d.cached_to + 1, to_height, start_height, new_distribution, base, has_indices ? &new_indices : nullptr))
           return std::nullopt;
         distribution = d.cached_distribution;
         distribution.reserve(distribution.size() + new_distribution.size());
         for (const auto &e: new_distribution)
           distribution.push_back(e);
+        if (has_indices)
+        {
+          indices = d.cached_indices;
+          indices.insert(indices.end(), new_indices.begin(), new_indices.end());
+        }
         start_height = d.cached_start_height;
         base = d.cached_base;
       }
       else
       {
-        if (!f(amount, from_height, to_height, start_height, distribution, base))
+        has_indices = want_indices;
+        if (!f(amount, from_height, to_height, start_height, distribution, base, has_indices ? &indices : nullptr))
           return std::nullopt;
       }
 
@@ -2582,13 +2627,68 @@ namespace cryptonote::rpc {
         d.cached_top_hash = get_hash(d.cached_to);
         d.cached_m10_hash = d.cached_to >= 10 ? get_hash(d.cached_to - 10) : crypto::null_hash;
         d.cached_distribution = distribution;
+        d.cached_indices = indices;
+        d.has_indices = has_indices;
         d.cached_start_height = start_height;
         d.cached_base = base;
         d.cached = true;
       }
 
-      return process_distribution(cumulative, start_height, std::move(distribution), base);
+      if (!want_indices)
+        indices.clear();
+      return process_distribution(cumulative, start_height, std::move(distribution), base, std::move(indices));
     }
+
+    // The distribution alone, for the native bucket, without output indices.
+    std::optional<output_distribution_data> get_output_distribution(
+        const std::function<bool(uint64_t, uint64_t, uint64_t, uint64_t&, std::vector<uint64_t>&, uint64_t&)>& f,
+        uint64_t amount,
+        uint64_t from_height,
+        uint64_t to_height,
+        const std::function<crypto::hash(uint64_t)>& get_hash,
+        bool cumulative,
+        uint64_t blockchain_height)
+    {
+      return get_output_distribution(
+          [&f](uint64_t amount, uint64_t from, uint64_t to, uint64_t& start, std::vector<uint64_t>& dist, uint64_t& base, std::vector<uint64_t>*) {
+            return f(amount, from, to, start, dist, base);
+          },
+          amount, from_height, to_height, get_hash, cumulative, blockchain_height, false /*token_bucket*/, false /*want_indices*/);
+    }
+  }
+
+  // Both get_output_distribution endpoints answer from here: one entry per
+  // requested amount and output kind, served from the per-kind cache.
+  static std::vector<std::tuple<uint64_t, uint8_t, output_distribution_data>> collect_output_distributions(
+      cryptonote::core& core, const std::vector<uint64_t>& requested_amounts, uint64_t from_height, uint64_t to_height, bool cumulative)
+  {
+    std::vector<std::tuple<uint64_t, uint8_t, output_distribution_data>> result;
+    const std::vector<uint64_t> amounts = unique_distribution_amounts(requested_amounts);
+    const uint64_t blockchain_height = core.get_current_blockchain_height();
+    // 0 is placeholder for the whole chain
+    const uint64_t req_to_height = to_height ? to_height : blockchain_height - 1;
+    for (uint64_t amount : amounts)
+    {
+      // A ring has to be built from outputs of the same kind, so a caller
+      // selecting decoys for a privacy-token input needs the token bucket, and
+      // the output_indices that map a rank within it back to a real global
+      // index. filter_type: 1 = native, 2 = privacy token.
+      for (auto [otype, ftype] : {std::pair{output_distribution_type::native, uint8_t{1}},
+                                  std::pair{output_distribution_type::token,  uint8_t{2}}})
+      {
+        auto data = detail::get_output_distribution(
+            [&core, otype=otype](uint64_t amount, uint64_t from, uint64_t to, uint64_t& start, std::vector<uint64_t>& dist, uint64_t& base, std::vector<uint64_t>* indices) {
+              return core.get_output_distribution(amount, from, to, start, dist, base, otype, indices);
+            },
+            amount, from_height, req_to_height,
+            [&core](uint64_t height) { return core.get_block_id_by_height(height); },
+            cumulative, blockchain_height, otype == output_distribution_type::token, true /*want_indices*/);
+        if (!data)
+          throw rpc_error{ERROR_INTERNAL, "Failed to get output distribution"};
+        result.emplace_back(amount, ftype, std::move(*data));
+      }
+    }
+    return result;
   }
 
   //------------------------------------------------------------------------------------------------------------------------------
@@ -2610,40 +2710,16 @@ namespace cryptonote::rpc {
 
     try
     {
-      // 0 is placeholder for the whole chain
-      const uint64_t req_to_height = get_output_distribution.request.to_height ? get_output_distribution.request.to_height : (m_core.get_current_blockchain_height() - 1);
-      for (uint64_t amount: get_output_distribution.request.amounts)
+      for (auto& [amount, ftype, data] : collect_output_distributions(m_core, get_output_distribution.request.amounts,
+               get_output_distribution.request.from_height, get_output_distribution.request.to_height, get_output_distribution.request.cumulative))
       {
-        // One entry per bucket, exactly as the .bin variant returns. A ring has
-        // to be built from outputs of the same kind, so a caller selecting
-        // decoys for a privacy-token input needs the token bucket - and the
-        // output_indices that map a rank within it back to a real global index.
-        //
-        // m_core is called directly rather than through
-        // detail::get_output_distribution because that helper's cache does not
-        // key on the bucket type: a native hit would hand back an empty
-        // output_indices for the token bucket, which spins the caller forever.
-        for (auto [otype, ftype] : {std::pair{output_distribution_type::native, uint8_t{1}},
-                                    std::pair{output_distribution_type::token,  uint8_t{2}}})
-        {
-          std::vector<uint64_t> dist, indices;
-          uint64_t start_height = 0, base = 0;
-          if (!m_core.get_output_distribution(amount, get_output_distribution.request.from_height,
-                                              req_to_height, start_height, dist, base, otype, &indices))
-            throw rpc_error{ERROR_INTERNAL, "Failed to get output distribution"};
-
-          if (!get_output_distribution.request.cumulative && !dist.empty())
-          {
-            for (size_t n = dist.size() - 1; n > 0; --n)
-              dist[n] -= dist[n - 1];
-            dist[0] -= base;
-          }
-
-          rpc::output_distribution_data data{std::move(dist), start_height, base, std::move(indices)};
-          GET_OUTPUT_DISTRIBUTION::distribution entry{std::move(data), amount, ftype};
-          get_output_distribution.response["distributions"].push_back(entry);
-        }
+        GET_OUTPUT_DISTRIBUTION::distribution entry{std::move(data), amount, ftype};
+        get_output_distribution.response["distributions"].push_back(entry);
       }
+    }
+    catch (const rpc_error&)
+    {
+      throw;
     }
     catch (const std::exception &e)
     {
@@ -2670,30 +2746,12 @@ namespace cryptonote::rpc {
 
     try
     {
-      // 0 is placeholder for the whole chain
-      const uint64_t req_to_height = req.to_height ? req.to_height : (m_core.get_current_blockchain_height() - 1);
-      for (uint64_t amount: req.amounts)
-      {
-        for (auto [otype, ftype] : {std::pair{output_distribution_type::native, uint8_t{1}},
-                                    std::pair{output_distribution_type::token,  uint8_t{2}}})
-        {
-          // Must call m_core directly (not detail::get_output_distribution) because the shared
-          // cache in detail:: does not key on otype — a native cache hit would return an empty
-          // output_indices vector for the token bucket, causing an infinite loop in the wallet.
-          std::vector<uint64_t> dist, indices;
-          uint64_t start_height = 0, base = 0;
-          if (!m_core.get_output_distribution(amount, req.from_height, req_to_height, start_height, dist, base, otype, &indices))
-            throw rpc_error{ERROR_INTERNAL, "Failed to get output distribution"};
-          if (!req.cumulative && !dist.empty())
-          {
-            for (size_t n = dist.size() - 1; n > 0; --n)
-              dist[n] -= dist[n - 1];
-            dist[0] -= base;
-          }
-          rpc::output_distribution_data data{std::move(dist), start_height, base, std::move(indices)};
-          res.distributions.push_back({std::move(data), amount, "", req.binary, req.compress, "", ftype});
-        }
-      }
+      for (auto& [amount, ftype, data] : collect_output_distributions(m_core, req.amounts, req.from_height, req.to_height, req.cumulative))
+        res.distributions.push_back({std::move(data), amount, "", req.binary, req.compress, "", ftype});
+    }
+    catch (const rpc_error&)
+    {
+      throw;
     }
     catch (const std::exception &e)
     {

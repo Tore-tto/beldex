@@ -185,3 +185,165 @@ TEST(output_distribution, part_noncumulative)
   ASSERT_EQ(res->distribution.size(), 5);
   ASSERT_EQ(res->distribution, std::vector<uint64_t>({0, 1, 5, 1, 4}));
 }
+
+// ---------------------------------------------------------------------------
+// Per-kind cache (native / privacy token) with output indices.
+// ---------------------------------------------------------------------------
+namespace
+{
+// A fake chain: per-height output counts for each kind. Global amount-0
+// indices are handed out in height order, native first within a block, so the
+// two kinds interleave the way they do on a real chain.
+struct fake_chain
+{
+  std::vector<uint64_t> native, token;
+  uint8_t fork = 0;          // changes block hashes from `fork_from` up
+  uint64_t fork_from = ~0ull;
+  size_t fetches = 0;
+  uint8_t id = 0;            // distinct per chain: the cache under test is process-wide
+
+  uint64_t height() const { return native.size(); }
+
+  crypto::hash hash(uint64_t h) const
+  {
+    crypto::hash r = crypto::null_hash;
+    *((uint64_t*)&r) = h;
+    r.data[31] = 0x5a;                       // never collides with ::get_block_hash
+    r.data[30] = h >= fork_from ? fork : 0;
+    r.data[29] = id;
+    return r;
+  }
+
+  bool fetch(bool want_token, uint64_t from, uint64_t to, uint64_t& start_height,
+             std::vector<uint64_t>& distribution, uint64_t& base, std::vector<uint64_t>* indices)
+  {
+    ++fetches;
+    if (from >= height() || to >= height())
+      return false;
+    start_height = from;
+    distribution.assign(height() - from, 0);
+    if (indices) indices->clear();
+    uint64_t global = 0, before = 0;
+    for (uint64_t h = 0; h < height(); ++h)
+      for (int kind = 0; kind < 2; ++kind)
+        for (uint64_t n = 0; n < (kind ? token[h] : native[h]); ++n, ++global)
+        {
+          if ((kind == 1) != want_token) continue;
+          if (h < from) { ++before; continue; }
+          if (h > to) continue;
+          ++distribution[h - from];
+          if (indices) indices->push_back(global);
+        }
+    distribution[0] += before;
+    for (size_t n = 1; n < distribution.size(); ++n)
+      distribution[n] += distribution[n - 1];
+    base = 0;
+    return true;
+  }
+
+  std::optional<cryptonote::rpc::output_distribution_data> get(bool want_token, uint64_t from, uint64_t to, bool want_indices = true)
+  {
+    return cryptonote::rpc::detail::get_output_distribution(
+        [this, want_token](uint64_t, uint64_t f, uint64_t t, uint64_t& s, std::vector<uint64_t>& d, uint64_t& b, std::vector<uint64_t>* i) {
+          return fetch(want_token, f, t, s, d, b, i);
+        },
+        0, from, to, [this](uint64_t h) { return hash(h); }, true /*cumulative*/, height(), want_token, want_indices);
+  }
+
+  // What an uncached request returns.
+  cryptonote::rpc::output_distribution_data expected(bool want_token, uint64_t from, uint64_t to)
+  {
+    cryptonote::rpc::output_distribution_data e{};
+    const size_t saved = fetches;
+    fetch(want_token, from, to, e.start_height, e.distribution, e.base, &e.output_indices);
+    fetches = saved;
+    e.distribution.resize(to - from + 1);
+    return e;
+  }
+};
+
+fake_chain make_chain(uint64_t blocks)
+{
+  static uint8_t next_id = 0;
+  fake_chain c;
+  c.id = ++next_id;
+  for (uint64_t h = 0; h < blocks; ++h)
+  {
+    c.native.push_back(1 + h % 3);
+    c.token.push_back(h % 4 == 0 ? 2 : 0);
+  }
+  return c;
+}
+
+void expect_same(const std::optional<cryptonote::rpc::output_distribution_data>& got, const cryptonote::rpc::output_distribution_data& want)
+{
+  ASSERT_TRUE(got != std::nullopt);
+  EXPECT_EQ(got->distribution, want.distribution);
+  EXPECT_EQ(got->output_indices, want.output_indices);
+}
+}
+
+TEST(output_distribution, cache_is_per_output_kind_and_keeps_indices)
+{
+  auto chain = make_chain(40);
+  const uint64_t to = chain.height() - 1;
+
+  // First request of each kind hits the chain; the answers differ.
+  expect_same(chain.get(false, 0, to), chain.expected(false, 0, to));
+  expect_same(chain.get(true, 0, to), chain.expected(true, 0, to));
+  EXPECT_EQ(chain.fetches, 2);
+  EXPECT_NE(chain.expected(false, 0, to).output_indices, chain.expected(true, 0, to).output_indices);
+
+  // Repeats are served from the cache, each kind getting its own answer.
+  for (int i = 0; i < 5; ++i)
+  {
+    expect_same(chain.get(true, 0, to), chain.expected(true, 0, to));
+    expect_same(chain.get(false, 0, to), chain.expected(false, 0, to));
+  }
+  EXPECT_EQ(chain.fetches, 2);
+}
+
+TEST(output_distribution, cache_extends_indices_with_new_blocks)
+{
+  auto chain = make_chain(40);
+  expect_same(chain.get(true, 0, 39), chain.expected(true, 0, 39));
+  EXPECT_EQ(chain.fetches, 1);
+
+  for (uint64_t h = 40; h < 48; ++h) { chain.native.push_back(2); chain.token.push_back(h % 2 ? 3 : 0); }
+  // Only the new blocks are fetched, and the result equals a full scan.
+  expect_same(chain.get(true, 0, 47), chain.expected(true, 0, 47));
+  EXPECT_EQ(chain.fetches, 2);
+  expect_same(chain.get(true, 0, 47), chain.expected(true, 0, 47));
+  EXPECT_EQ(chain.fetches, 2);
+}
+
+TEST(output_distribution, cache_follows_a_reorg)
+{
+  auto chain = make_chain(40);
+  expect_same(chain.get(true, 0, 39), chain.expected(true, 0, 39));
+
+  // Replace the top 3 blocks and grow by 2: the tip hash changes, the hash 10
+  // below does not, so the cache drops 10 blocks and refetches from there.
+  chain.fork = 1;
+  chain.fork_from = 37;
+  for (uint64_t h = 37; h < 40; ++h) { chain.native[h] = 4; chain.token[h] = 1; }
+  chain.native.push_back(1); chain.token.push_back(5);
+  chain.native.push_back(1); chain.token.push_back(0);
+  expect_same(chain.get(true, 0, 41), chain.expected(true, 0, 41));
+  expect_same(chain.get(false, 0, 41), chain.expected(false, 0, 41));
+
+  // A deeper reorg invalidates the cache entirely; the answer is still right.
+  chain.fork = 2;
+  chain.fork_from = 5;
+  for (uint64_t h = 5; h < chain.height(); ++h) chain.token[h] = 1;
+  expect_same(chain.get(true, 0, 41), chain.expected(true, 0, 41));
+}
+
+TEST(output_distribution, cache_without_indices_is_not_served_to_a_caller_that_needs_them)
+{
+  auto chain = make_chain(40);
+  auto plain = chain.get(false, 0, 39, false /*want_indices*/);
+  ASSERT_TRUE(plain != std::nullopt);
+  EXPECT_TRUE(plain->output_indices.empty());
+  expect_same(chain.get(false, 0, 39, true), chain.expected(false, 0, 39));
+}
