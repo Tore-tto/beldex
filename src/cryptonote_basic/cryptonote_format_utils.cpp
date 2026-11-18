@@ -87,7 +87,10 @@ namespace cryptonote
     const rct::rctSig &rv = tx.rct_signatures;
     const bool plus = rv.type == rct::RCTType::BulletproofPlus;
     const uint64_t bp_base = (32 * ((plus ? 6 : 9) + 7 * 2)) / 2; // notional size of a 2 output proof, normalized to 1 proof (ie, divided by 2)
-    const size_t n_outputs = tx.vout.size();
+    // Only native outputs are in the native range proof. Privacy-token outputs
+    // have their own proof and their own limit.
+    const size_t n_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const cryptonote::tx_out& out) {
+      return !std::holds_alternative<cryptonote::tx_out_zyphora>(out.target); });
     if (n_padded_outputs <= 2)
       return 0;
     size_t nlr = 0;
@@ -100,6 +103,23 @@ namespace cryptonote
         + std::to_string(n_padded_outputs) + ", bp_size " + std::to_string(bp_size));
     const uint64_t bp_clawback = (bp_base * n_padded_outputs - bp_size) * 4 / 5;
     return bp_clawback;
+  }
+  //---------------------------------------------------------------
+  // Estimated size of the privacy-token data (zy_sig and token_proofs) of a tx
+  // that does not carry it: one ZY_sig per token input, and per-output parts
+  // of the surjection, balance and range proofs. Zero for a non-token tx.
+  uint64_t estimate_token_proofs_size(const cryptonote::transaction &tx)
+  {
+    const size_t zy_inputs = std::count_if(tx.vin.begin(), tx.vin.end(), [](const cryptonote::txin_v& in) {
+      return std::holds_alternative<cryptonote::txin_zy_input>(in); });
+    const size_t zy_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const cryptonote::tx_out& out) {
+      return std::holds_alternative<cryptonote::tx_out_zyphora>(out.target); });
+    if (zy_inputs == 0 && zy_outputs == 0)
+      return 0;
+    uint64_t size = zy_inputs * 928 + zy_outputs * 516;
+    if (zy_outputs > 0)
+      size += 640;
+    return size + 512; // padding for vector lengths
   }
   //---------------------------------------------------------------
 }
@@ -484,28 +504,7 @@ namespace cryptonote
     
     // Add artificial weight padding for view wallets missing Zyphora token proofs
     if (tx.version >= txversion::v4_tx_types && tx.token_proofs.empty())
-    {
-      size_t num_zy_inputs = 0;
-      for (const auto& in : tx.vin)
-        if (std::holds_alternative<txin_zy_input>(in))
-          num_zy_inputs++;
-          
-      size_t num_zy_outputs = 0;
-      for (const auto& out : tx.vout)
-        if (std::holds_alternative<tx_out_zyphora>(out.target))
-          num_zy_outputs++;
-          
-      if (num_zy_inputs > 0 || num_zy_outputs > 0)
-      {
-        size_t estimated_token_proofs_size = 0;
-        estimated_token_proofs_size += num_zy_inputs * 928;
-        estimated_token_proofs_size += num_zy_outputs * 516;
-        if (num_zy_outputs > 0) estimated_token_proofs_size += 640;
-
-        estimated_token_proofs_size += 512; // padding for vector lengths
-        return blob_size + bp_clawback + estimated_token_proofs_size;
-      }
-    }
+      return blob_size + bp_clawback + estimate_token_proofs_size(tx);
 
     return blob_size + bp_clawback;
   }
@@ -519,7 +518,21 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(tx.rct_signatures.type >= rct::RCTType::Bulletproof2,
         std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support older range proof types");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
-    CHECK_AND_ASSERT_MES(std::holds_alternative<cryptonote::txin_to_key>(tx.vin[0]), std::numeric_limits<uint64_t>::max(), "empty vin");
+
+    // The native rct data covers only native inputs and outputs. Privacy-token
+    // inputs and outputs are proven by zy_sig and token_proofs, added below.
+    const cryptonote::txin_to_key* first_native_in = nullptr;
+    size_t n_native_inputs = 0;
+    for (const auto& in : tx.vin)
+      if (const auto* key_in = std::get_if<cryptonote::txin_to_key>(&in))
+      {
+        if (!first_native_in) first_native_in = key_in;
+        ++n_native_inputs;
+      }
+    CHECK_AND_ASSERT_MES(first_native_in, std::numeric_limits<uint64_t>::max(), "no native input");
+    const size_t n_native_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const tx_out& out) {
+      return !std::holds_alternative<tx_out_zyphora>(out.target); });
+    CHECK_AND_ASSERT_MES(n_native_outputs <= TX_BULLETPROOF_MAX_OUTPUTS, std::numeric_limits<uint64_t>::max(), "too many native outputs");
 
     // get pruned data size
     uint64_t weight = serialization::dump_binary(const_cast<transaction&>(tx)).size();
@@ -529,23 +542,26 @@ namespace cryptonote
 
     // calculate deterministic bulletproofs size (assumes canonical BP format)
     size_t nrl = 0, n_padded_outputs;
-    while ((n_padded_outputs = (1u << nrl)) < tx.vout.size())
+    while ((n_padded_outputs = (1u << nrl)) < n_native_outputs)
       ++nrl;
     nrl += 6;
     uint64_t extra = 32 * ((rct::is_rct_bulletproof_plus(tx.rct_signatures.type) ? 6 : 9) + 2 * nrl) + 2;
     weight += extra;
 
     // calculate deterministic CLSAG/MLSAG data size
-    const size_t ring_size = var::get<cryptonote::txin_to_key>(tx.vin[0]).key_offsets.size();
+    const size_t ring_size = first_native_in->key_offsets.size();
     if (rct::is_rct_clsag(tx.rct_signatures.type))
-      extra = tx.vin.size() * (ring_size + 2) * 32;
+      extra = n_native_inputs * (ring_size + 2) * 32;
     else
-      extra = tx.vin.size() * (ring_size * (1 + 1) * 32 + 32 /* cc */);
+      extra = n_native_inputs * (ring_size * (1 + 1) * 32 + 32 /* cc */);
     weight += extra;
 
     // calculate deterministic pseudoOuts size
-    extra =  32 * (tx.vin.size());
+    extra =  32 * n_native_inputs;
     weight += extra;
+
+    // privacy-token signatures and proofs: an estimate, not the exact size
+    weight += estimate_token_proofs_size(tx);
 
     // clawback
     uint64_t bp_clawback = get_transaction_weight_clawback(tx, n_padded_outputs);

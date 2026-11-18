@@ -441,6 +441,7 @@ KV_SERIALIZE_MAP_CODE_BEGIN(payment_details)
   KV_SERIALIZE(payment_id)
   KV_SERIALIZE(tx_hash)
   KV_SERIALIZE(amount)
+  KV_SERIALIZE(token_id)
   KV_SERIALIZE(block_height)
   KV_SERIALIZE(unlock_time)
   KV_SERIALIZE(locked)
@@ -451,6 +452,7 @@ KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(GET_PAYMENTS::request)
   KV_SERIALIZE(payment_id)
+  KV_SERIALIZE_OPT(include_tokens, false)
 KV_SERIALIZE_MAP_CODE_END()
 
 
@@ -462,6 +464,7 @@ KV_SERIALIZE_MAP_CODE_END()
 KV_SERIALIZE_MAP_CODE_BEGIN(GET_BULK_PAYMENTS::request)
   KV_SERIALIZE(payment_ids)
   KV_SERIALIZE(min_block_height)
+  KV_SERIALIZE_OPT(include_tokens, false)
 KV_SERIALIZE_MAP_CODE_END()
 
 
@@ -472,6 +475,7 @@ KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(transfer_details)
   KV_SERIALIZE(amount)
+  KV_SERIALIZE(token_id)
   KV_SERIALIZE(spent)
   KV_SERIALIZE(global_index)
   KV_SERIALIZE(tx_hash)
@@ -488,6 +492,7 @@ KV_SERIALIZE_MAP_CODE_BEGIN(INCOMING_TRANSFERS::request)
   KV_SERIALIZE(transfer_type)
   KV_SERIALIZE(account_index)
   KV_SERIALIZE(subaddr_indices)
+  KV_SERIALIZE_OPT(include_tokens, false)
 KV_SERIALIZE_MAP_CODE_END()
 
 

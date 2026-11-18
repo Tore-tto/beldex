@@ -89,7 +89,9 @@ protected:
       throw std::runtime_error("Cannot encode pool fixture");
     return result;
   }
-  crypto::hash insert(transaction tx, uint64_t received)
+  // `verified` models whether the tx passed its input check when it entered
+  // the pool; a tx delivered inside a block is stored even when it did not.
+  crypto::hash insert(transaction tx, uint64_t received, bool verified = true)
   {
     const auto id = get_transaction_hash(tx);
     txpool_tx_meta_t meta{};
@@ -99,6 +101,11 @@ protected:
     meta.relayed = true;
     // Model transactions restored after a detach; admission dedup is bypassed.
     meta.kept_by_block = true;
+    if (verified)
+    {
+      meta.max_used_block_height = 0;
+      meta.max_used_block_id = db->get_block_hash_from_height(0);
+    }
     db_wtxn_guard guard(db);
     db->add_txpool_tx(id, tx_to_blob(tx), meta);
     guard.stop();
@@ -159,5 +166,21 @@ TEST_F(TokenPool, MintAdmissionDedupUsesTokenId)
   EXPECT_FALSE(tx_pool_test_access::duplicate(pool, tx(1, 2, 3)));
   clear();
   EXPECT_FALSE(tx_pool_test_access::duplicate(pool, tx(1, 1, 2)));
+}
+// A tx that was stored without passing its input check (which is where the
+// ownership proof is verified) must not hold the per-token pending slot, or
+// anyone could keep the owner's own operation out of the pool.
+TEST_F(TokenPool, UnverifiedOperationDoesNotHoldThePendingSlot)
+{
+  for (size_t kind = 0; kind < 3; ++kind) // register, mint, update
+  {
+    SCOPED_TRACE(kind);
+    insert(tx(kind, 1, 1), 1, false /*verified*/);
+    EXPECT_FALSE(tx_pool_test_access::duplicate(pool, tx(kind, 1, 2)));
+    clear();
+    insert(tx(kind, 1, 1), 1, true /*verified*/);
+    EXPECT_TRUE(tx_pool_test_access::duplicate(pool, tx(kind, 1, 2)));
+    clear();
+  }
 }
 } // namespace

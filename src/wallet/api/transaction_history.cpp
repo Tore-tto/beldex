@@ -141,6 +141,7 @@ void TransactionHistoryImpl::refresh()
         TransactionInfoImpl * ti = new TransactionInfoImpl();
         ti->m_paymentid = payment_id;
         ti->m_amount    = pd.m_amount;
+        ti->m_token_id  = pd.is_token() ? tools::type_to_hex(pd.m_token_id) : "";
         ti->m_direction = TransactionInfo::Direction_In;
         ti->m_hash      = tools::type_to_hex(pd.m_tx_hash);
         ti->m_blockheight = pd.m_block_height;
@@ -257,6 +258,7 @@ void TransactionHistoryImpl::refresh()
         TransactionInfoImpl * ti = new TransactionInfoImpl();
         ti->m_paymentid = payment_id;
         ti->m_amount    = pd.m_amount;
+        ti->m_token_id  = pd.is_token() ? tools::type_to_hex(pd.m_token_id) : "";
         ti->m_direction = TransactionInfo::Direction_In;
         ti->m_hash      = tools::type_to_hex(pd.m_tx_hash);
         ti->m_blockheight = pd.m_block_height;

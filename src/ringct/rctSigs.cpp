@@ -1899,6 +1899,17 @@ namespace rct {
                         std::string& reason)
     {
       try {
+        // A tx with token outputs may have at most
+        // TX_BULLETPROOF_PLUS_MAX_OUTPUTS outputs in total, native and token
+        // together. This also keeps the aggregated token range proof within
+        // what the Bulletproof+ verifier supports.
+        if (tx.has_zyphora_outputs() && tx.vout.size() > cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS)
+        {
+            reason = "too many outputs in a privacy-token tx (" + std::to_string(tx.vout.size()) + ", maximum "
+                   + std::to_string(cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS) + " native and token together)";
+            return false;
+        }
+
         // ── 0. Prevalidate the proof set is well-formed ──────────────────────
         // token_proofs is a self-describing serialized vector, so serialization
         // constrains neither WHICH proofs appear nor how many. Reject duplicates
@@ -1969,7 +1980,7 @@ namespace rct {
 
             // Token-operation proofs only belong to their originating tx kinds:
             //   token_operation_proof          -> register_privacy_token / mint_token / burn_token
-            //   token_operation_ownership_proof -> mint_token / update_token
+            //   token_operation_ownership_proof -> register_privacy_token / mint_token / update_token
             // (see construct_tx_with_tx_key.) burn_token also carries an
             // amount-commitment composition_proof: it binds the publicly-declared
             // burned amount to the TDO commitment that the zy_balance_proof then
@@ -1977,7 +1988,8 @@ namespace rct {
             const bool aop_allowed       = tx.type == cryptonote::txtype::register_privacy_token
                                         || tx.type == cryptonote::txtype::mint_token
                                         || tx.type == cryptonote::txtype::burn_token;
-            const bool ownership_allowed = tx.type == cryptonote::txtype::mint_token
+            const bool ownership_allowed = tx.type == cryptonote::txtype::register_privacy_token
+                                        || tx.type == cryptonote::txtype::mint_token
                                         || tx.type == cryptonote::txtype::update_token;
             if (n_token_op  != 0 && !aop_allowed)
             {
@@ -1986,7 +1998,7 @@ namespace rct {
             }
             if (n_ownership != 0 && !ownership_allowed)
             {
-                reason = "token_operation_ownership_proof present on a tx that is not mint/update";
+                reason = "token_operation_ownership_proof present on a tx that is not deploy/mint/update";
                 return false;
             }
 
@@ -2216,7 +2228,7 @@ namespace rct {
         }
 
         // ── 3. Verify ownership proof for token operations ────────────────────
-        // For deploy/mint/burn, verify the Schnorr signature against descriptor.owner.
+        // For deploy/mint/update, the Schnorr signature is checked against descriptor.owner.
         for (const auto& proof : tx.token_proofs)
         {
             if (const auto* op = std::get_if<rct::token_operation_ownership_proof>(&proof))

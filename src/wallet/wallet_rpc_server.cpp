@@ -1838,10 +1838,15 @@ namespace tools
     m_wallet->get_payments(payment_id, payment_list);
     for (auto& payment : payment_list)
     {
+      // A token payment's amount is in token units, not BDX. Callers that
+      // credit `amount` as BDX must never see one unless they asked for it.
+      if (payment.is_token() && !req.include_tokens)
+        continue;
       wallet_rpc::payment_details& rpc_payment = res.payments.emplace_back();
       rpc_payment.payment_id   = req.payment_id;
       rpc_payment.tx_hash      = tools::type_to_hex(payment.m_tx_hash);
       rpc_payment.amount       = payment.m_amount;
+      rpc_payment.token_id     = payment.is_token() ? tools::type_to_hex(payment.m_token_id) : "";
       rpc_payment.block_height = payment.m_block_height;
       rpc_payment.unlock_time  = payment.m_unlock_time;
       rpc_payment.locked       = !m_wallet->is_transfer_unlocked(payment.m_unlock_time, payment.m_block_height, payment.m_unmined_flash);
@@ -1865,10 +1870,13 @@ namespace tools
 
       for (auto & payment : payment_list)
       {
+        if (payment.second.is_token() && !req.include_tokens)
+          continue; // token units, not BDX: opt-in only
         wallet_rpc::payment_details& rpc_payment = res.payments.emplace_back();
         rpc_payment.payment_id   = tools::type_to_hex(payment.first);
         rpc_payment.tx_hash      = tools::type_to_hex(payment.second.m_tx_hash);
         rpc_payment.amount       = payment.second.m_amount;
+        rpc_payment.token_id     = payment.second.is_token() ? tools::type_to_hex(payment.second.m_token_id) : "";
         rpc_payment.block_height = payment.second.m_block_height;
         rpc_payment.unlock_time  = payment.second.m_unlock_time;
         rpc_payment.subaddr_index = payment.second.m_subaddr_index;
@@ -1911,10 +1919,13 @@ namespace tools
 
       for (auto & payment : payment_list)
       {
+        if (payment.is_token() && !req.include_tokens)
+          continue; // token units, not BDX: opt-in only
         wallet_rpc::payment_details& rpc_payment = res.payments.emplace_back();
         rpc_payment.payment_id   = payment_id_str;
         rpc_payment.tx_hash      = tools::type_to_hex(payment.m_tx_hash);
         rpc_payment.amount       = payment.m_amount;
+        rpc_payment.token_id     = payment.is_token() ? tools::type_to_hex(payment.m_token_id) : "";
         rpc_payment.block_height = payment.m_block_height;
         rpc_payment.unlock_time  = payment.m_unlock_time;
         rpc_payment.subaddr_index = payment.m_subaddr_index;
@@ -1955,8 +1966,11 @@ namespace tools
       {
         if (req.account_index != td.m_subaddr_index.major || (!req.subaddr_indices.empty() && req.subaddr_indices.count(td.m_subaddr_index.minor) == 0))
           continue;
+        if (td.is_zyphora() && !req.include_tokens)
+          continue; // token units, not BDX: opt-in only
         wallet_rpc::transfer_details& rpc_transfers = res.transfers.emplace_back();
         rpc_transfers.amount       = td.amount();
+        rpc_transfers.token_id     = td.is_zyphora() ? tools::type_to_hex(td.m_token_id) : "";
         rpc_transfers.spent        = td.m_spent;
         rpc_transfers.global_index = td.m_global_output_index;
         rpc_transfers.tx_hash      = tools::type_to_hex(td.m_txid);

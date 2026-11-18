@@ -88,6 +88,12 @@ namespace cryptonote::rpc {
   // Function used for getting an output distribution; this is non-static because we need to get at
   // it from the test suite, but should be considered internal.
   namespace detail {
+    // Fetches a distribution for [from, to]; fills the last argument, when not
+    // null, with the amount-0 global index of every output counted.
+    using output_distribution_fetcher = std::function<bool(uint64_t amount, uint64_t from_height, uint64_t to_height, uint64_t& start_height, std::vector<uint64_t>& distribution, uint64_t& base, std::vector<uint64_t>* output_indices)>;
+    // Cached per output kind (token_bucket false = native, true = privacy
+    // token). With want_indices the result carries output_indices.
+    std::optional<output_distribution_data> get_output_distribution(const output_distribution_fetcher& f, uint64_t amount, uint64_t from_height, uint64_t to_height, const std::function<crypto::hash(uint64_t)>& get_hash, bool cumulative, uint64_t blockchain_height, bool token_bucket, bool want_indices);
     std::optional<output_distribution_data> get_output_distribution(const std::function<bool(uint64_t, uint64_t, uint64_t, uint64_t&, std::vector<uint64_t>&, uint64_t&)>& f, uint64_t amount, uint64_t from_height, uint64_t to_height, const std::function<crypto::hash(uint64_t)>& get_hash, bool cumulative, uint64_t blockchain_height);
   }
 

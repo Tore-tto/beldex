@@ -771,7 +771,8 @@ namespace tools::wallet_rpc {
   {
     std::string payment_id;                     // Payment ID matching the input parameter.
     std::string tx_hash;                        // Transaction hash used as the transaction ID.
-    uint64_t amount;                            // Amount for this payment.
+    uint64_t amount;                            // Amount for this payment: atomic BDX, or atomic units of the token when token_id is set.
+    std::string token_id;                       // Privacy token this payment is in (hex). Empty for BDX.
     uint64_t block_height;                      // Height of the block that first confirmed this payment.
     uint64_t unlock_time;                       // Time (in block height) until this payment is safe to spend.
     bool locked;                                // If the payment is spendable or not
@@ -790,6 +791,7 @@ namespace tools::wallet_rpc {
     struct request
     {
       std::string payment_id; // Payment ID used to find the payments (16 characters hex).
+      bool include_tokens;    // (Optional) Also return privacy-token payments, each with token_id set. Defaults to false: BDX payments only.
 
       KV_MAP_SERIALIZABLE
     };
@@ -817,6 +819,7 @@ namespace tools::wallet_rpc {
     {
       std::vector<std::string> payment_ids; // Payment IDs used to find the payments (16 characters hex).
       uint64_t min_block_height;            // The block height at which to start looking for payments.
+      bool include_tokens;                  // (Optional) Also return privacy-token payments, each with token_id set. Defaults to false: BDX payments only.
 
       KV_MAP_SERIALIZABLE
     };
@@ -833,7 +836,8 @@ namespace tools::wallet_rpc {
   //
   struct transfer_details
   {
-    uint64_t amount;                            // Amount of this transfer.
+    uint64_t amount;                            // Amount of this transfer: atomic BDX, or atomic units of the token when token_id is set.
+    std::string token_id;                       // Privacy token this output is in (hex). Empty for BDX.
     bool spent;                                 // Indicates if this transfer has been spent.
     uint64_t global_index;                      // The index into the global list of transactions grouped by amount in the Beldex network.
     std::string tx_hash;                        // Several incoming transfers may share the same hash if they were in the same transaction.
@@ -858,6 +862,7 @@ namespace tools::wallet_rpc {
       std::string transfer_type;          // "all": all the transfers, "available": only transfers which are not yet spent, OR "unavailable": only transfers which are already spent.
       uint32_t account_index;             // (Optional) Return transfers for this account. (defaults to 0)
       std::set<uint32_t> subaddr_indices; // (Optional) Return transfers sent to these subaddresses.
+      bool include_tokens;                // (Optional) Also return privacy-token outputs, each with token_id set. Defaults to false: BDX outputs only.
 
       KV_MAP_SERIALIZABLE
     };

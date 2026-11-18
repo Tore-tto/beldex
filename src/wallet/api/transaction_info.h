@@ -63,6 +63,7 @@ public:
     virtual std::string hash() const override;
     virtual std::time_t timestamp() const override;
     virtual std::string paymentId() const override;
+    virtual std::string tokenId() const override;
     virtual const std::vector<Transfer> &transfers() const override;
     virtual uint64_t confirmations() const override;
     virtual uint64_t unlockTime() const override;
@@ -90,6 +91,7 @@ private:
     std::string m_hash;
     std::time_t m_timestamp;
     std::string m_paymentid;
+    std::string m_token_id;
     std::vector<Transfer> m_transfers;
     uint64_t    m_confirmations;
     uint64_t    m_unlock_time;

@@ -483,7 +483,13 @@ namespace cryptonote
           m_blockchain.add_txpool_tx(id, blob, meta);
           if (!insert_key_images(tx, id, opts.kept_by_block))
             return false;
-          index_token_ops(tx, id);
+          // Deliberately NOT index_token_ops(): this tx failed its input
+          // check, which is where a token operation's ownership proof is
+          // verified. Anyone can deliver such a tx inside a block message, so
+          // letting it hold the per-token pending slot would let an outsider
+          // block the owner's own register/mint/update for free. If it does
+          // become valid later, fill_block_template still keeps two operations
+          // on one token out of the same block.
           m_txs_by_fee_and_receive_time.emplace(std::tuple<bool, double, std::time_t>(non_standard_tx, fee / (double)(tx_weight ? tx_weight : 1), receive_time), id);
           lock.commit();
         }
@@ -2219,7 +2225,12 @@ end:
           MFATAL("Failed to insert key images from txpool tx");
           return false;
         }
-        index_token_ops(tx, txid);
+        // Only a tx whose inputs were verified may hold the per-token pending
+        // slot (see add_tx). A tx stored with a failed input check has no
+        // max_used_block_id; one that passed always has, since every token
+        // operation spends at least one native input for its fee.
+        if (meta.max_used_block_id != crypto::null_hash)
+          index_token_ops(tx, txid);
 
         const bool non_standard_tx = !tx.is_transfer();
         m_txs_by_fee_and_receive_time.emplace(std::tuple<bool, double, time_t>(non_standard_tx, meta.fee / (double)meta.weight, meta.receive_time), txid);

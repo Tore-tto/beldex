@@ -1641,6 +1641,14 @@ namespace cryptonote
       const size_t native_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const tx_out& out) {
         return !std::holds_alternative<tx_out_zyphora>(out.target);
       });
+      // A tx with privacy-token outputs may have at most
+      // TX_BULLETPROOF_PLUS_MAX_OUTPUTS outputs in total, native and token
+      // together: the same limit a native-only tx gets from its range proof.
+      if (native_outputs != tx.vout.size() && tx.vout.size() > TX_BULLETPROOF_PLUS_MAX_OUTPUTS)
+      {
+        MERROR_VER("privacy-token tx with more than " << TX_BULLETPROOF_PLUS_MAX_OUTPUTS << " outputs, rejected for tx id= " << get_transaction_hash(tx));
+        return false;
+      }
       if (tx.rct_signatures.outPk.size() != native_outputs)
       {
         MERROR_VER("tx with mismatched vout/outPk count, rejected for tx id= " << get_transaction_hash(tx));

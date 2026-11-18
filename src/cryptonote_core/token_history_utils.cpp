@@ -703,14 +703,22 @@ bool validate_tx_token_operations_against_db(
         return false;
     }
 
-      // ── Ownership verification for emission ──────────────────────────────────
-    if (op.operation_type == token_descriptor_operation_type::mint_token || op.operation_type == token_descriptor_operation_type::update_token)
+    // ── Ownership verification (register + mint + update) ────────────────────
+    // The owner signs the tx prefix hash, which covers the outputs and the
+    // descriptor. For mint/update the key is the owner on record. For register
+    // it is the owner named in the descriptor: the descriptor and salt are
+    // public as soon as the tx is broadcast, so without this signature anyone
+    // could re-register the same token id with the initial supply paid to
+    // themselves.
+    const bool is_register = op.operation_type == token_descriptor_operation_type::register_token;
+    if (is_register || op.operation_type == token_descriptor_operation_type::mint_token || op.operation_type == token_descriptor_operation_type::update_token)
     {
-      if (!it->second.exists)
+      if (!is_register && !it->second.exists)
       {
         reason = "mint_token/update_token attempted for unknown token";
         return false;
       }
+      const crypto::public_key& owner = is_register ? op.descriptor.owner : it->second.descriptor.owner;
 
       bool ownership_verified = false;
       for (const auto& proof : tx.token_proofs)
@@ -719,7 +727,7 @@ bool validate_tx_token_operations_against_db(
         {
           crypto::hash prefix_hash;
           get_transaction_prefix_hash(tx, prefix_hash);
-          if (crypto::verify_schnorr_sig(rct::hash2rct(prefix_hash), rct::pk2rct(it->second.descriptor.owner), p->sig))
+          if (crypto::verify_schnorr_sig(rct::hash2rct(prefix_hash), rct::pk2rct(owner), p->sig))
           {
             ownership_verified = true;
             break;
@@ -729,7 +737,8 @@ bool validate_tx_token_operations_against_db(
 
       if (!ownership_verified)
       {
-        reason = "missing or invalid token ownership proof for emission/update";
+        reason = is_register ? "missing or invalid token ownership proof for registration"
+                             : "missing or invalid token ownership proof for emission/update";
         return false;
       }
     }

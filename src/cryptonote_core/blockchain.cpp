@@ -3453,17 +3453,25 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     if(tx.type == txtype::register_privacy_token)
     {
       // Initial registration of a new token requires an amount-commitment proof binding the declared total supply to the output commitments,
-      // but does not require an ownership proof since the token is not yet owned by anyone.
-      // Again, the cryptographic verification of the amount-commitment proof happens in validate_tx_token_operations_against_db();
+      // and an ownership signature from the owner named in the descriptor, so that nobody else can register the same token id first.
+      // Again, the cryptographic verification of both happens in validate_tx_token_operations_against_db();
       // here we only do a cheap structural presence check for early rejection.
       bool has_amount_commitment = false;
-      for (const auto& proof : tx.token_proofs)      
+      bool has_ownership         = false;
+      for (const auto& proof : tx.token_proofs)
       {
-        if (std::holds_alternative<rct::token_operation_proof>(proof)) { has_amount_commitment = true; }
+        if (std::holds_alternative<rct::token_operation_proof>(proof))           { has_amount_commitment = true; }
+        if (std::holds_alternative<rct::token_operation_ownership_proof>(proof)) { has_ownership          = true; }
       }
       if (!has_amount_commitment)
       {
         MERROR_VER("Token registration tx missing amount-commitment proof");
+        tvc.m_invalid_input = true;
+        return false;
+      }
+      if (!has_ownership)
+      {
+        MERROR_VER("Token registration tx missing ownership proof");
         tvc.m_invalid_input = true;
         return false;
       }

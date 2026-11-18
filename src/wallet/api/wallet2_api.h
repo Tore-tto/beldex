@@ -196,6 +196,9 @@ struct TransactionInfo
     virtual std::string hash() const = 0;
     virtual std::time_t timestamp() const = 0;
     virtual std::string paymentId() const = 0;
+    //! privacy token an incoming payment is in (hex); empty for BDX. When set,
+    //! amount() is in atomic units of that token, not BDX.
+    virtual std::string tokenId() const = 0;
     //! only applicable for output transactions
     virtual const std::vector<Transfer> & transfers() const = 0;
 };
